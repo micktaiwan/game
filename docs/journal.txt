@@ -1,0 +1,23 @@
+August 16 — One‑day build journal
+
+I started from zero and pair‑coded this app in a single day. It was amazing to see it come alive step by step.
+
+- Bootstrapped a Three.js scene with camera, renderer, post‑processing (FXAA, Bloom, optional SSAO), and a clean sky gradient.
+- Built a small flat‑top hex world and mapped axial (q, r) coordinates to world (x, z).
+- Added interactive input: pan/orbit/zoom, tile‑first picking, selection ring, and hover ring.
+- Implemented a Command Center design (tri‑pod capacitors) with a subtle “breathing” animation and energy spikes at spawn.
+- Created a volumetric goal indicator: a scrolling light column with rising embers, color‑coded per unit goal.
+- Designed the scout: a luminous orb with a thin equator ring and three tiny colored satellites orbiting around it (kept independent from goal colors to stay consistently vibrant).
+- Stabilized the server core loop: single timing source, energy gating, harvest/build holds, safe ID comparisons, and immediate build debit vs. batched move debit.
+- Ensured harvest happens only after the hold ends; no premature removals.
+- Fixed energy edge cases so holds finish even when energy hits zero.
+- Wired a periodic rare resource spawn with caps and safe upserts.
+- Synced GFX: light gizmo and auto‑orbit are off by default and only enabled when the GFX panel is open.
+- Refactored the scene into modules:
+  - Extracted goal indicator to `imports/game/scene/indicators/goalIndicator.js`.
+  - Extracted light gizmo to `imports/game/scene/gizmos/lightGizmo.js`.
+  - Extracted scout builder to `imports/game/scene/units/buildScout.js`.
+- Cleaned up the TODO by translating it fully to English and aligning it with our Markdown rules.
+- Captured learnings and decisions in `docs/learnings.md`, including timing/GFX drift prevention.
+
+I love the feel: the orb’s satellites, the selection ring, the gentle goal pillar, and the calm starfield. The foundation is solid: the loop is robust, visuals are readable, and the codebase is ready for modular growth (units, resources, UI next).

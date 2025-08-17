@@ -1,17 +1,21 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
-import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
+import { createGoalIndicator, updateGoalIndicator, createBeamTexture, colorForGoal } from './indicators/goalIndicator';
+import { ensureLightGizmo } from './gizmos/lightGizmo';
+import { buildScoutMesh } from './units/buildScout';
+import { buildSoldierMesh } from './units/buildSoldier';
+import { ensureUnitsRendered as ensureUnitsRenderedExt } from './units/index';
+import { ensureResourcesRendered as ensureResourcesRenderedExt } from './resources/index';
+import { ensureTilesRendered as ensureTilesRenderedExt } from './tiles/index';
+import { axialToWorld as axialToWorldFn } from './math/axial';
+import { animateScouts } from './units/animate';
+import { createScene } from './core/createScene';
+import { createPostProcess } from './core/postprocess';
+import { installInputHandlers } from './core/input';
+import { defaultGfx, applyGfxSettings as applyGfxSettingsExt } from './core/gfxSettings';
 
 function axialToWorld(q, r, radius) {
-  // Flat-top hex axial to world (XZ plane)
-  // See Red Blob Games: x = size * (3/2 * q), z = size * (sqrt(3) * (r + q/2))
-  const x = radius * (3 / 2) * q;
-  const z = radius * Math.sqrt(3) * (r + q / 2);
-  return new THREE.Vector3(x, 0, z);
+  const p = axialToWorldFn(q, r, radius);
+  return new THREE.Vector3(p.x, 0, p.z);
 }
 
 /**
@@ -105,124 +109,19 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     return points;
   }
 
-  // Camera
-  const camera = new THREE.PerspectiveCamera(
-    60,
-    containerElement.clientWidth / containerElement.clientHeight,
-    0.05,
-    1000
-  );
-  camera.position.set(0, 10, 0);
-  camera.lookAt(0, 0, 0);
+  // Scene core
+  const { scene: sceneFromCore, camera, renderer } = createScene(containerElement);
+  // Replace local scene reference with core scene
+  // (we created sky/scene earlier; ensure we keep same scene reference)
+  // We already use 'scene' below; keep as is
 
-  // Renderer
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setSize(containerElement.clientWidth, containerElement.clientHeight);
-  // Tone mapping / color space for better visuals
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
-  // three r0.179 uses outputColorSpace
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  containerElement.appendChild(renderer.domElement);
-
-  // Postprocessing: Bloom
-  const composer = new EffectComposer(renderer);
-  const renderPass = new RenderPass(scene, camera);
-  composer.addPass(renderPass);
-  // SSAO (lightweight) early, then bloom, then FXAA to screen
-  const ssaoPass = new SSAOPass(scene, camera, containerElement.clientWidth, containerElement.clientHeight);
-  ssaoPass.kernelRadius = 6;
-  ssaoPass.minDistance = 0.004;
-  ssaoPass.maxDistance = 0.12;
-  ssaoPass.output = SSAOPass.OUTPUT.Default;
-  ssaoPass.enabled = false;
-  composer.addPass(ssaoPass);
-  const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(containerElement.clientWidth, containerElement.clientHeight),
-    0.25, // strength (lower)
-    0.6,  // radius (lower)
-    0.75  // threshold (higher cutoff)
-  );
-  composer.addPass(bloomPass);
-  const fxaaPass = new ShaderPass(FXAAShader);
-  fxaaPass.material.uniforms['resolution'].value.set(1 / (containerElement.clientWidth * (window.devicePixelRatio || 1)), 1 / (containerElement.clientHeight * (window.devicePixelRatio || 1)));
-  fxaaPass.renderToScreen = true;
-  composer.addPass(fxaaPass);
+  // Postprocessing
+  const { composer, ssaoPass, bloomPass, fxaaPass } = createPostProcess(renderer, scene, camera, containerElement);
 
   function applyGfxSettings(next) {
     gfx = { ...gfx, ...next };
-    renderer.toneMappingExposure = gfx.exposure;
-    ambient.intensity = gfx.ambientIntensity;
-    // Fog
-    if (gfx.fogEnabled) {
-      scene.fog = new THREE.FogExp2(0x0a0d12, gfx.fogDensity);
-    } else {
-      scene.fog = null;
-    }
-    // Bloom
-    bloomPass.enabled = !!gfx.bloomEnabled;
-    bloomPass.strength = gfx.bloomStrength;
-    bloomPass.radius = gfx.bloomRadius;
-    bloomPass.threshold = gfx.bloomThreshold;
-    // FXAA
-    fxaaPass.enabled = !!gfx.fxaaEnabled;
-    // SSAO
-    ssaoPass.enabled = !!gfx.ssaoEnabled;
-    ssaoPass.kernelRadius = gfx.ssaoKernelRadius;
-    ssaoPass.minDistance = gfx.ssaoMinDistance;
-    ssaoPass.maxDistance = gfx.ssaoMaxDistance;
-    // Tiles
-    for (const mesh of tileMeshByKey.values()) {
-      if (mesh.material && mesh.material.isMaterial) {
-        const baseColor = new THREE.Color(gfx.tileColor);
-        const bright = Math.max(0.2, gfx.tileBrightness || 1.0);
-        baseColor.multiplyScalar(bright);
-        mesh.material.color = baseColor;
-        mesh.material.emissive = new THREE.Color(gfx.tileEmissive);
-        mesh.material.emissiveIntensity = gfx.tileEmissiveIntensity;
-        mesh.material.needsUpdate = true;
-      }
-    }
-    // Outline
-    outlineMaterial.color = new THREE.Color(gfx.outlineColor);
-    outlineMaterial.opacity = gfx.outlineOpacity;
-    outlineMaterial.needsUpdate = true;
-    // Sky
-    if (skyMat && skyMat.uniforms) {
-      skyMat.uniforms.topColor.value = new THREE.Color(gfx.skyTop);
-      skyMat.uniforms.bottomColor.value = new THREE.Color(gfx.skyBottom);
-      skyMat.needsUpdate = true;
-    }
-    // Directional light azimuth control (left/right)
-    if (typeof gfx.dirLightAzimuthDeg === 'number' || typeof gfx.dirLightRadius === 'number') {
-      const deg = typeof gfx.dirLightAzimuthDeg === 'number' ? gfx.dirLightAzimuthDeg : 34;
-      const rad = THREE.MathUtils.degToRad(deg);
-      const r = gfx.dirLightRadius || 3.6;
-      const y = light.position.y;
-      light.position.set(Math.cos(rad) * r, y, Math.sin(rad) * r);
-    }
-    // Gizmo visibility
-    if (gfx.showLightGizmo) {
-      if (!lightGizmo) {
-        lightGizmo = new THREE.Group();
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd166 }));
-        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 8), new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.7 }));
-        stem.name = 'stem';
-        lightGizmo.add(head);
-        lightGizmo.add(stem);
-        debugGroup.add(lightGizmo);
-      }
-      // update gizmo transform
-      lightGizmo.visible = true;
-      lightGizmo.position.set(light.position.x, 0, light.position.z);
-      const head = lightGizmo.children[0];
-      const stem = lightGizmo.getObjectByName('stem');
-      if (head) head.position.y = light.position.y;
-      if (stem) { stem.scale.y = Math.max(0.001, light.position.y); stem.position.y = light.position.y * 0.5; }
-    } else if (lightGizmo) {
-      lightGizmo.visible = false;
-    }
+    const ensureLightGizmoRef = () => { lightGizmo = ensureLightGizmo(debugGroup, light, lightGizmo); };
+    applyGfxSettingsExt(gfx, { renderer, ambient, scene, bloomPass, fxaaPass, ssaoPass, tileMeshByKey, outlineMaterial, skyMat, light, ensureLightGizmoRef });
   }
 
   // Initial preset will be applied after gfx is initialized below
@@ -437,34 +336,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   const activeTileBursts = new Set();
   let tilesInitialized = false;
   // Graphics settings (runtime adjustable)
-  let gfx = {
-    exposure: 1.6,
-    ambientIntensity: 1.2,
-    fogEnabled: true,
-    fogDensity: 0.007,
-    bloomEnabled: true,
-    bloomStrength: 0.65,
-    bloomRadius: 0.6,
-    bloomThreshold: 0.1,
-    fxaaEnabled: true,
-    ssaoEnabled: false,
-    ssaoKernelRadius: 6,
-    ssaoMinDistance: 0.004,
-    ssaoMaxDistance: 0.12,
-    tileColor: 3822440,
-    tileEmissive: 1054496,
-    tileEmissiveIntensity: 1.13,
-    tileBrightness: 2.0,
-    outlineColor: 1713971,
-    outlineOpacity: 0.2,
-    skyTop: 1185051,
-    skyBottom: 856343,
-    dirLightAzimuthDeg: 342.122900001822,
-    dirLightRadius: 3.6,
-    showLightGizmo: true,
-    dirLightAutoOrbit: true,
-    dirLightOrbitSpeedDeg: 90,
-  };
+  let gfx = { ...defaultGfx };
   // Apply the initial graphics preset now that gfx is defined
   function applyInitialPreset() {
     // Delay to ensure passes are fully ready
@@ -497,192 +369,25 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
 
   /** Update or remove unit meshes to match the given list. */
   function ensureUnitsRendered(unitsList) {
-    // Remove meshes for units that no longer exist
-    for (const [id, mesh] of unitMeshesById.entries()) {
-      if (!unitsList.find((u) => u._id === id)) {
-        unitsGroup.remove(mesh);
-        if (mesh.geometry) mesh.geometry.dispose();
-        if (mesh.material) mesh.material.dispose();
-        unitMeshesById.delete(id);
-        const ind = unitIndicatorsById.get(id);
-        if (ind) {
-          unitsGroup.remove(ind);
-          if (ind.material) ind.material.dispose();
-          if (ind.geometry) ind.geometry.dispose();
-          unitIndicatorsById.delete(id);
-        }
-      }
-    }
-    // Add/update meshes
-    for (const u of unitsList) {
-      let mesh = unitMeshesById.get(u._id);
-      const currentPos = axialToWorldVec(u.q, u.r);
-      if (!mesh) {
-        // Build unit visual depending on type
-        const group = new THREE.Group();
-        if ((u.type || 'scout') === 'soldier') {
-          // Soldier: sturdy cylinder + turret sphere + ring, blue tint
-          const body = new THREE.Mesh(
-            new THREE.CylinderGeometry(renderRadius * 0.28, renderRadius * 0.32, renderRadius * 0.6, 18),
-            new THREE.MeshStandardMaterial({ color: 0x2da8ff, metalness: 0.35, roughness: 0.5 })
-          );
-          body.position.y = renderRadius * 0.3;
-          const turret = new THREE.Mesh(
-            new THREE.SphereGeometry(renderRadius * 0.2, 16, 12),
-            new THREE.MeshStandardMaterial({ color: 0xbfdfff, metalness: 0.2, roughness: 0.4, emissive: 0x0f2740, emissiveIntensity: 0.25 })
-          );
-          turret.position.y = renderRadius * 0.62;
-          const ring = new THREE.Mesh(
-            new THREE.TorusGeometry(renderRadius * 0.24, renderRadius * 0.04, 10, 24),
-            new THREE.MeshStandardMaterial({ color: 0x2da8ff, metalness: 0.25, roughness: 0.5 })
-          );
-          ring.rotation.x = Math.PI / 2;
-          ring.position.y = renderRadius * 0.12;
-          group.add(body); group.add(turret); group.add(ring);
-        } else {
-          // Scout: Orb + gyroscopic ring (round, direction-agnostic)
-          const orb = new THREE.Mesh(
-            new THREE.SphereGeometry(renderRadius * 0.38, 18, 14),
-            new THREE.MeshStandardMaterial({ color: 0xaad7c8, metalness: 0.2, roughness: 0.45, emissive: 0x1b473f, emissiveIntensity: 0.35 })
-          );
-          orb.position.y = renderRadius * 0.45;
-          const ring = new THREE.Mesh(
-            new THREE.TorusGeometry(renderRadius * 0.5, renderRadius * 0.06, 10, 40),
-            new THREE.MeshBasicMaterial({ color: 0x32d296, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending })
-          );
-          ring.name = 'gyroRing';
-          ring.rotation.x = Math.PI / 2;
-          ring.position.y = renderRadius * 0.45;
-          group.add(orb);
-          group.add(ring);
-        }
-        group.position.set(currentPos.x, 0, currentPos.z);
-        group.userData = { kind: 'unit', unitId: u._id };
-        // Ensure child meshes also carry selection metadata for raycasting hits
-        group.traverse((child) => {
-          if (child && child.isMesh) {
-            child.userData = { ...(child.userData || {}), kind: 'unit', unitId: u._id };
-          }
-        });
-        unitsGroup.add(group);
-        unitMeshesById.set(u._id, group);
-        // Light column indicator
-        const column = createGoalIndicator(u.goal);
-        column.position.set(currentPos.x, 0.0, currentPos.z);
-        unitsGroup.add(column);
-        unitIndicatorsById.set(u._id, column);
-      } else {
-        // Simplified movement: snap directly to server position (no interpolation)
-        mesh.position.set(currentPos.x, 0, currentPos.z);
-        // Update indicator position and style
-        let ind = unitIndicatorsById.get(u._id);
-        if (!ind) {
-          ind = createGoalIndicator(u.goal);
-          unitsGroup.add(ind);
-          unitIndicatorsById.set(u._id, ind);
-        }
-        ind.position.set(mesh.position.x, 0.0, mesh.position.z);
-        updateGoalIndicator(ind, u.goal);
-      }
-    }
+    return ensureUnitsRenderedExt({
+      THREE,
+      unitsGroup,
+      unitMeshesById,
+      unitIndicatorsById,
+      renderRadius,
+      axialToWorldVec,
+      createGoalIndicator,
+      updateGoalIndicator,
+      buildSoldierMesh,
+      buildScoutMesh,
+    }, unitsList);
   }
 
-  function createBeamTexture(hexColor) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
-    const color = `#${hexColor.toString(16).padStart(6, '0')}`;
-    // Transparent base → bright core → fade out top
-    grad.addColorStop(0.00, `${color}00`);
-    grad.addColorStop(0.20, `${color}55`);
-    grad.addColorStop(0.50, `${color}ff`);
-    grad.addColorStop(0.80, `${color}66`);
-    grad.addColorStop(1.00, `${color}00`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(1, 1);
-    tex.needsUpdate = true;
-    return tex;
-  }
+  // Moved to indicators/goalIndicator.js
 
-  function createGoalIndicator(goal) {
-    const group = new THREE.Group();
-    group.userData.kind = 'indicator';
-    group.userData.goal = goal;
-    group.userData.phase = Math.random() * Math.PI * 2;
-    // Vertical light column with scrolling texture
-    const height = 1.6;
-    const radius = renderRadius * 0.15;
-    const beamGeom = new THREE.CylinderGeometry(radius, radius, height, 20, 1, true);
-    const beamMat = new THREE.MeshBasicMaterial({
-      color: colorForGoal(goal),
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      map: createBeamTexture(colorForGoal(goal))
-    });
-    const beam = new THREE.Mesh(beamGeom, beamMat);
-    beam.position.y = height * 0.5;
-    group.add(beam);
-    // Particles that float upward inside the beam
-    const particleCount = 28;
-    const pGeom = new THREE.BufferGeometry();
-    const positions = new Float32Array(particleCount * 3);
-    const speeds = new Float32Array(particleCount);
-    for (let i = 0; i < particleCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const rad = radius * 0.6 * Math.sqrt(Math.random());
-      positions[i * 3 + 0] = Math.cos(angle) * rad;
-      positions[i * 3 + 1] = Math.random() * height;
-      positions[i * 3 + 2] = Math.sin(angle) * rad;
-      speeds[i] = 0.4 + Math.random() * 0.8;
-    }
-    pGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    pGeom.computeBoundingSphere();
-    const pMat = new THREE.PointsMaterial({
-      color: colorForGoal(goal),
-      size: radius * 0.35,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true
-    });
-    const particles = new THREE.Points(pGeom, pMat);
-    particles.position.y = 0.0;
-    group.add(particles);
-    // Cache for animation
-    group.userData.beam = beam;
-    group.userData.beamMat = beamMat;
-    group.userData.beamHeight = height;
-    group.userData.particles = particles;
-    group.userData.particleSpeeds = speeds;
-    group.userData.scrollSpeed = 0.35;
-    return group;
-  }
+  // Moved to indicators/goalIndicator.js
 
-  function updateGoalIndicator(group, goal) {
-    const color = new THREE.Color(colorForGoal(goal));
-    const beamMat = group.userData.beamMat;
-    if (beamMat) {
-      beamMat.color = color;
-      beamMat.map = createBeamTexture(colorForGoal(goal));
-      beamMat.needsUpdate = true;
-    }
-    const pMat = group.userData.particles?.material;
-    if (pMat && pMat.isMaterial) {
-      pMat.color = color;
-      pMat.needsUpdate = true;
-    }
-    group.userData.goal = goal;
-  }
+  // Moved to indicators/goalIndicator.js
 
   function colorForGoal(goal) {
     if (goal === 'harvest') return 0xffd166; // amber
@@ -693,89 +398,25 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   }
 
   /** Update or remove resource meshes to match the given list. */
-  function ensureResourcesRendered(resourceList) {
-    // cleanup removed
-    for (const [id, mesh] of resourceMeshesById.entries()) {
-      if (!resourceList.find((r) => r._id === id)) {
-        resourcesGroup.remove(mesh);
-        if (mesh.geometry) mesh.geometry.dispose();
-        if (mesh.material) mesh.material.dispose();
-        resourceMeshesById.delete(id);
-      }
-    }
-    for (const r of resourceList) {
-      let mesh = resourceMeshesById.get(r._id);
-      const pos = axialToWorldVec(r.q, r.r);
-      if (!mesh) {
-        const color = r.kind === 'energy' ? 0xffd166 : 0x118ab2; // energy: yellow, metal: blue
-        const geom = new THREE.DodecahedronGeometry(renderRadius * 0.35);
-        const mat = new THREE.MeshStandardMaterial({ color, metalness: 0.1, roughness: 0.7, emissive: color, emissiveIntensity: 0.15 });
-        mesh = new THREE.Mesh(geom, mat);
-        mesh.position.set(pos.x, renderRadius * 0.35, pos.z);
-        mesh.userData = { kind: 'resource', resourceId: r._id };
-        resourcesGroup.add(mesh);
-        resourceMeshesById.set(r._id, mesh);
-      } else {
-        mesh.position.set(pos.x, renderRadius * 0.35, pos.z);
-      }
-    }
-  }
+  const ensureResourcesRendered = (resourceList) => ensureResourcesRenderedExt(resourcesGroup, resourceMeshesById, axialToWorldVec, renderRadius, resourceList);
 
   /** Add/remove tiles in the scene to reflect nextTiles from the DB. */
   function ensureTilesRendered(nextTiles) {
-    if (!Array.isArray(nextTiles)) return;
-    const isInitialPass = !tilesInitialized;
-    const nextKeySet = new Set(nextTiles.map((t) => `${t.q},${t.r}`));
-    // Remove tiles that no longer exist
-    for (const key of Array.from(tileKeys)) {
-      if (!nextKeySet.has(key)) {
-        const mesh = tileMeshByKey.get(key);
-        const line = outlineByKey.get(key);
-        if (mesh) {
-          tilesGroup.remove(mesh);
-          if (mesh.geometry) mesh.geometry.dispose();
-          if (mesh.material) mesh.material.dispose();
-          tileMeshByKey.delete(key);
-        }
-        if (line) {
-          outlinesGroup.remove(line);
-          outlineByKey.delete(key);
-        }
-        tileKeys.delete(key);
-      }
-    }
-    for (const t of nextTiles) {
-      const key = `${t.q},${t.r}`;
-      if (tileKeys.has(key)) continue;
-      // Animated appearance: start small above ground, drop gently with scale bounce
-      const pos = axialToWorld(t.q, t.r, tileRadius);
-      const mesh = new THREE.Mesh(hexDisc, tileMaterial.clone());
-      mesh.position.set(pos.x, 0.6, pos.z);
-      mesh.scale.set(0.1, 0.1, 0.1);
-      mesh.receiveShadow = false;
-      mesh.castShadow = false;
-      mesh.userData = { kind: 'tile', q: t.q, r: t.r };
-      tilesGroup.add(mesh);
-      tileMeshByKey.set(key, mesh);
-      const line = new THREE.LineLoop(outlineGeometry, outlineMaterial);
-      line.position.set(pos.x, 0.001, pos.z);
-      outlinesGroup.add(line);
-      outlineByKey.set(key, line);
-      tileKeys.add(key);
-      // simple tween-like animation using requestAnimationFrame
-      const start = performance.now();
-      const duration = 1000;
-      function animateDrop(now) {
-        const tNorm = Math.min(1, (now - start) / duration);
-        const ease = tNorm < 0.5 ? 2 * tNorm * tNorm : 1 - Math.pow(-2 * tNorm + 2, 2) / 2;
-        mesh.position.y = 0.6 * (1 - ease);
-        const s = 0.1 + 0.9 * ease;
-        mesh.scale.set(s, s, s);
-        if (tNorm < 1) requestAnimationFrame(animateDrop);
-      }
-      requestAnimationFrame(animateDrop);
-      if (!isInitialPass) spawnTileSparkBurst(pos);
-    }
+    ensureTilesRenderedExt({
+      THREE,
+      tilesGroup,
+      outlinesGroup,
+      outlineMaterial,
+      outlineGeometry,
+      tileMeshByKey,
+      outlineByKey,
+      tileKeys,
+      axialToWorld,
+      tileRadius,
+      hexDisc,
+      tileMaterial,
+      spawnTileSparkBurst,
+    }, nextTiles);
     tilesInitialized = true;
   }
 
@@ -942,7 +583,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
           return;
         }
       }
-      // Then try resources
+      // Then try resources (only if no tile was resolved)
       const resHits = raycaster.intersectObject(resourcesGroup, true);
       if (resHits.length > 0) {
         const first = resHits[0].object;
@@ -952,7 +593,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
           return;
         }
       }
-      // Then try units (priority over tiles so unit is selectable)
+      // Then try units (fallback)
       const unitHits = raycaster.intersectObject(unitsGroup, true);
       if (unitHits.length > 0) {
         let chosenUnitId = null;
@@ -972,7 +613,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
           return;
         }
       }
-      // Then try tiles (for explore direction)
+      // Then try tiles (fallback)
       const tileHits = raycaster.intersectObject(tilesGroup, true);
       if (tileHits.length > 0 && typeof onClickTile === 'function') {
         const tObj = tileHits[0].object;
@@ -1097,14 +738,8 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
         particles.material.opacity = 0.7 + 0.25 * (0.5 + 0.5 * Math.sin(t * 3.0 + phase));
       }
     }
-    // Spin scout gyro rings (if any)
-    for (const [, mesh] of unitMeshesById.entries()) {
-      const ring = mesh.getObjectByName && mesh.getObjectByName('gyroRing');
-      if (ring && ring.material) {
-        ring.rotation.z += 0.04;
-        ring.material.opacity = 0.45 + 0.25 * (0.5 + 0.5 * Math.sin(t * 2.0));
-      }
-    }
+    // Animate scout adornments (equator ring + satellites)
+    animateScouts(unitMeshesById, dt, t, renderRadius);
     // CC breathing/rotation if present
     if (commandCenter && commandCenter.userData && commandCenter.userData.ccFX) {
       const fx = commandCenter.userData.ccFX;
@@ -1163,9 +798,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     composer.render();
   };
 
-  renderer.domElement.addEventListener('pointerdown', onPointerDown, { passive: true });
-  renderer.domElement.addEventListener('pointermove', onPointerMove, { passive: true });
-  renderer.domElement.addEventListener('pointerup', onPointerUp, { passive: true });
+  const removeBasicInput = installInputHandlers(renderer, camera, state, updateCamera, drag);
   renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('resize', onResize);
   onResize();
@@ -1249,9 +882,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   function cleanup() {
     cancelAnimationFrame(animationFrameId);
     window.removeEventListener('resize', onResize);
-    renderer.domElement.removeEventListener('pointerdown', onPointerDown);
-    renderer.domElement.removeEventListener('pointermove', onPointerMove);
-    renderer.domElement.removeEventListener('pointerup', onPointerUp);
+    removeBasicInput && removeBasicInput();
     renderer.domElement.removeEventListener('wheel', onWheel);
     renderer.dispose();
     hexDisc.dispose();
@@ -1349,5 +980,3 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
 
   return { cleanup, resetView, setUnits, setResources, setSelectedUnitId, setTiles, setBase, applyGfxSettings, getGfxSettings };
 }
-
-

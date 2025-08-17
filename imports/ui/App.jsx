@@ -228,11 +228,7 @@ export const App = () => {
       units: units.map(u => ({ _id: u._id, type: u.type, q: u.q, r: u.r, hp: u.hp, energy: u.energy, goal: u.goal, prevQ: u.prevQ, prevR: u.prevR, lastMoveAt: u.lastMoveAt, buildHoldUntil: u.buildHoldUntil })),
       resources: resources.map(res => ({ _id: res._id, kind: res.kind, q: res.q, r: res.r, amount: res.amount }))
     });
-    pushMessage('Welcome Commander. Initializing systems...', 'success');
-    pushMessage(
-      'Controls:\n- Pan: Drag (left click)\n- Orbit: Shift+Drag or Right Drag\n- Zoom: Mouse wheel / Pinch\n\nUnits:\n- Select a scout by clicking it (highlighted).\n- Press I: Idle mode\n- Press H: Harvest nearest resource\n- Click a tile: Explore towards that direction',
-      'info'
-    );
+    // Intro messages removed to avoid noise
     // End of reset cycle if any
     if (isResetting) setIsResetting(false);
     // Reset intro run flag on scene (re)creation
@@ -283,7 +279,7 @@ export const App = () => {
   // Keep light gizmo visibility in sync with panel visibility, including first load
   useEffect(() => {
     if (!apiRef.current || !apiRef.current.applyGfxSettings) return;
-    apiRef.current.applyGfxSettings({ showLightGizmo: !!showGfx });
+    apiRef.current.applyGfxSettings({ showLightGizmo: !!showGfx, dirLightAutoOrbit: !!showGfx });
   }, [showGfx, apiRef.current]);
 
   useEffect(() => {
@@ -441,10 +437,19 @@ export const App = () => {
             (() => {
               const u = units.find(x => x._id === selectedUnitId);
               if (!u) return <div style={{ opacity: 0.6 }}>No unit</div>;
+              const effectiveGoal = (u.goal || ((u.type || 'scout') === 'soldier' ? 'defend' : 'idle'));
+              const modeColorMap = {
+                idle: '#32d296',
+                harvest: '#ffd166',
+                explore: '#bc66ff',
+                defend: '#2da8ff',
+                attack: '#ff4d4d'
+              };
+              const modeColor = modeColorMap[effectiveGoal] || '#e6edf3';
               return (
                 <div style={{ pointerEvents: 'auto' }}>
                   <div>Unit: <strong>{u.type.toUpperCase()}</strong> @ (q={u.q}, r={u.r})</div>
-                  <div>Mode: <strong>{(u.goal || ((u.type||'scout')==='soldier'?'defend':'idle')).toUpperCase()}</strong></div>
+                  <div>Mode: <strong style={{ color: modeColor }}>{effectiveGoal.toUpperCase()}</strong></div>
                   { (u.type || 'scout') === 'soldier' ? (
                     <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
                       <button onClick={async () => { await Meteor.callAsync('units.setGoal', { unitId: u._id, goal: 'defend' }); }} style={{ cursor: 'pointer' }}>I/D: Defend</button>

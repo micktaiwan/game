@@ -5,10 +5,22 @@ import { ResourcesCollection } from '/imports/api/resources';
 import { BasesCollection } from '/imports/api/bases';
 
 // --- Debug logging ---------------------------------------------------------
-const DEBUG_MOVE = true; // set to false to silence movement logs
+const DEBUG_MOVE = false; // set to true to enable movement logs
 function dlog(...args) {
   if (DEBUG_MOVE) console.log('[SIM]', ...args);
 }
+
+// --- Timings & Simulation constants (single source of truth) --------------
+// Movement/holds are throttled and animated based on these timings.
+// Keep in sync with client-side rendering where applicable.
+const MOVE_PERIOD_MS = 1100;     // per-step throttle for units
+const HARVEST_ANIM_MS = 900;     // hold duration for harvest completion
+const BUILD_TIME_MS = 1200;      // hold duration after creating a new tile (Explore)
+const SERVER_TICK_MS = 500;      // server simulation tick interval
+
+// Fallback thresholds
+const PATH_FAIL_MAX_TICKS = 6;   // after N path failures, switch to Idle
+const BUILD_BLOCK_MAX_TICKS = 6; // after N energy blocks while building, switch to Idle
 
 function axialNeighbors(q, r) {
   return [
@@ -331,24 +343,24 @@ async function simulationTick() {
   if (!base) return;
   const MOVE_COST = 1;                 // energy per step
   const EXPLORE_BUILD_COST = 10;       // energy to create a new tile during explore
-  if ((base.energy ?? 0) < MOVE_COST) return; // insufficient shared energy → no movement
-  const MOVE_PERIOD_MS = 1100; // slower step
-  const BUILD_TIME_MS = 1200;  // hold time when creating a new tile
-  const HARVEST_ANIM_MS = 900; // keep in sync with client interpolation
-  // removed duplicate HARVEST_ANIM_MS declaration
+  // Note: Do not early-return on low energy; holds must be allowed to finish.
+  // Energy gating for movement/build is enforced per-unit below.
+  let availableEnergy = base.energy ?? 0;
   // snapshot
   const tiles = await TilesCollection.find({}, { fields: { q: 1, r: 1 } }).fetchAsync();
   const tileSet = new Set(tiles.map((t) => `${t.q},${t.r}`));
-  const units = await UnitsCollection.find({ type: 'scout' }, { fields: { _id: 1, q: 1, r: 1, lastMoveAt: 1, buildHoldUntil: 1, harvestHoldUntil: 1, pendingHarvestResourceId: 1, goal: 1, goalData: 1 } }).fetchAsync();
+  const units = await UnitsCollection.find(
+    { type: 'scout' },
+    { fields: { _id: 1, q: 1, r: 1, lastMoveAt: 1, buildHoldUntil: 1, harvestHoldUntil: 1, pendingHarvestResourceId: 1, goal: 1, goalData: 1, pathFailCount: 1, buildBlockedCount: 1 } }
+  ).fetchAsync();
   const resources = await ResourcesCollection.find({}, { fields: { _id: 1, q: 1, r: 1, kind: 1, amount: 1 } }).fetchAsync();
   dlog(`Tick: base.energy=${base.energy}, tiles=${tiles.length}, units=${units.length}, resources=${resources.length}`);
 
   // Occupancy to avoid two units in same tile in the same tick
   const occupied = new Set(units.map((u) => `${u.q},${u.r}`));
 
-  let energySpent = 0;
+  let moveEnergySpent = 0;
   for (const u of units) {
-    if ((base.energy - energySpent) < MOVE_COST) { dlog('Stop: not enough energy for any move'); break; }
     // Rate-limit unit movement or building hold
     const nowMs = Date.now();
     const lastMs = u.lastMoveAt ? new Date(u.lastMoveAt).getTime() : 0;
@@ -378,6 +390,7 @@ async function simulationTick() {
     }
     let next = null;
     const isBaseTile = (q, r) => (typeof base.baseQ === 'number' && typeof base.baseR === 'number' && q === base.baseQ && r === base.baseR);
+    const canMove = (availableEnergy - moveEnergySpent) >= MOVE_COST;
     if (u.goal === 'idle' || !u.goal) {
       dlog('Idle', u._id);
       continue;
@@ -398,9 +411,20 @@ async function simulationTick() {
         }
         continue;
       }
+      if (!canMove) { dlog('Energy gating: cannot move (harvest) this tick', u._id); continue; }
       const passable = (q, r) => tileSet.has(`${q},${r}`) && !occupied.has(`${q},${r}`) && !isBaseTile(q, r);
       const path = aStarPath({ q: u.q, r: u.r }, { q: best.q, r: best.r }, passable);
-      if (path.length === 0) { dlog('No path to resource', u._id, 'from', u.q, u.r, 'to', best.q, best.r); continue; }
+      if (path.length === 0) {
+        const current = (u.pathFailCount || 0) + 1;
+        if (current >= PATH_FAIL_MAX_TICKS) {
+          await UnitsCollection.updateAsync({ _id: u._id }, { $set: { goal: 'idle', pathFailCount: 0, updatedAt: new Date() } });
+          dlog('Path fallback: switching to Idle after failures', u._id);
+        } else {
+          await UnitsCollection.updateAsync({ _id: u._id }, { $set: { pathFailCount: current, updatedAt: new Date() } });
+          dlog('No path to resource; increment fail count', u._id, current);
+        }
+        continue;
+      }
       dlog('Harvest step', u._id, '->', path[0]);
       next = path[0];
     } else if (u.goal === 'explore') {
@@ -426,11 +450,20 @@ async function simulationTick() {
       if (!best) { dlog('Explore: no neighbor'); continue; }
       if (!best.exists) {
         // Require enough energy to create a new tile; consume build energy on creation and hold
-        if ((base.energy - energySpent) < EXPLORE_BUILD_COST) {
-          dlog('Explore: insufficient energy to build', u._id);
+        if ((availableEnergy - moveEnergySpent) < EXPLORE_BUILD_COST) {
+          const current = (u.buildBlockedCount || 0) + 1;
+          if (current >= BUILD_BLOCK_MAX_TICKS) {
+            await UnitsCollection.updateAsync({ _id: u._id }, { $set: { goal: 'idle', buildBlockedCount: 0, updatedAt: new Date() } });
+            dlog('Explore: energy blocked repeatedly; switching to Idle', u._id);
+          } else {
+            await UnitsCollection.updateAsync({ _id: u._id }, { $set: { buildBlockedCount: current, updatedAt: new Date() } });
+            dlog('Explore: insufficient energy to build; increment block count', u._id, current);
+          }
           continue; // not enough energy to build this step
         }
-        energySpent += EXPLORE_BUILD_COST;
+        // Immediate debit on build
+        availableEnergy -= EXPLORE_BUILD_COST;
+        await BasesCollection.updateAsync({ _id: 'player' }, { $inc: { energy: -EXPLORE_BUILD_COST }, $set: { updatedAt: new Date() } });
         // Create the tile if missing (idempotent via upsert) and hold
         const now = new Date();
         await TilesCollection.updateAsync({ q: best.q, r: best.r }, { $setOnInsert: { q: best.q, r: best.r, createdAt: now } }, { upsert: true });
@@ -440,20 +473,21 @@ async function simulationTick() {
         // No movement this tick; will move next tick after hold
         continue;
       }
+      if (!canMove) { dlog('Energy gating: cannot move (explore) this tick', u._id); continue; }
       next = { q: best.q, r: best.r };
     }
     if (!next) continue;
     const nextKey = `${next.q},${next.r}`;
     if (occupied.has(nextKey)) continue; // just in case
     // Move: spend energy; exploration costs 1 as well; only tile creation is costly
-    energySpent += MOVE_COST;
+    moveEnergySpent += MOVE_COST;
     const now = new Date();
     await UnitsCollection.updateAsync({ _id: u._id }, {
       $set: { prevQ: u.q, prevR: u.r, q: next.q, r: next.r, lastMoveAt: now, updatedAt: now, buildHoldUntil: null }
     });
     occupied.delete(`${u.q},${u.r}`);
     occupied.add(nextKey);
-    dlog('Moved', u._id, 'to', next.q, next.r, 'energySpentSoFar', energySpent);
+    dlog('Moved', u._id, 'to', next.q, next.r, 'moveEnergySpentSoFar', moveEnergySpent);
     // If a resource is present on the arrival tile, hold for harvest animation; remove on next pass
     const res = resources.find((r) => r.q === next.q && r.r === next.r);
     if (res) {
@@ -461,9 +495,9 @@ async function simulationTick() {
       dlog('Arrived on resource, start harvest hold', u._id, res._id);
     }
   }
-  if (energySpent > 0) {
-    await BasesCollection.updateAsync({ _id: 'player' }, { $inc: { energy: -energySpent }, $set: { updatedAt: new Date() } });
-    dlog('Tick energy debited', energySpent, 'remaining', (await BasesCollection.findOneAsync({ _id: 'player' })).energy);
+  if (moveEnergySpent > 0) {
+    await BasesCollection.updateAsync({ _id: 'player' }, { $inc: { energy: -moveEnergySpent }, $set: { updatedAt: new Date() } });
+    dlog('Tick energy debited (moves)', moveEnergySpent, 'remaining', (await BasesCollection.findOneAsync({ _id: 'player' })).energy);
   }
 }
 
@@ -542,7 +576,7 @@ function scheduleResourceSpawnLoop() {
 Meteor.startup(() => {
   Meteor.setInterval(() => {
     simulationTick().catch(() => {});
-  }, 500);
+  }, SERVER_TICK_MS);
   scheduleResourceSpawnLoop();
 });
 

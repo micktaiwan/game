@@ -49,7 +49,7 @@
 ### Movement & Holds timing
 
 - Server tick every 500 ms; per-step `MOVE_PERIOD_MS` ~1100 ms to throttle unit stepping.
-- Client interpolation `lerpDuration` ~900 ms from `(prevQ,prevR)` to `(q,r)`, easing sinus on Y for hop.
+- Client rendering currently snaps to server positions (no interpolation). Interpolation (e.g., ~900 ms lerp with easing) is an optional future enhancement.
 - Harvest flow:
   - On arrival on a resource tile, server sets `harvestHoldUntil` (~900 ms) and defers resource removal.
   - When hold elapses, resource is removed and base stockpile is credited.
