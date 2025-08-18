@@ -1,7 +1,7 @@
 import React from 'react';
 
 export const TopBar = ({ onResetView, onToggleGfx, showGfx }) => (
-  <div style={{ position: 'fixed', top: 10, left: 10, zIndex: 10, pointerEvents: 'auto' }}>
+  <div style={{ pointerEvents: 'auto' }}>
     <button
       onClick={onResetView}
       style={{

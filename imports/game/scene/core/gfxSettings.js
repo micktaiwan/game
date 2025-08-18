@@ -30,7 +30,7 @@ export const defaultGfx = {
 };
 
 export function applyGfxSettings(gfx, ctx) {
-  const { renderer, ambient, scene, bloomPass, fxaaPass, ssaoPass, tileMeshByKey, outlineMaterial, skyMat, light, ensureLightGizmoRef } = ctx;
+  const { renderer, ambient, scene, bloomPass, fxaaPass, ssaoPass, tileMeshByKey, outlineMaterial, skyMat, light, ensureLightGizmoRef, hideLightGizmoRef } = ctx;
   renderer.toneMappingExposure = gfx.exposure;
   ambient.intensity = gfx.ambientIntensity;
   if (gfx.fogEnabled) {
@@ -73,8 +73,9 @@ export function applyGfxSettings(gfx, ctx) {
     const y = light.position.y;
     light.position.set(Math.cos(rad) * r, y, Math.sin(rad) * r);
   }
-  if (gfx.showLightGizmo && ensureLightGizmoRef) {
-    ensureLightGizmoRef();
+  if (ensureLightGizmoRef && hideLightGizmoRef) {
+    if (gfx.showLightGizmo) ensureLightGizmoRef();
+    else hideLightGizmoRef();
   }
 }
 

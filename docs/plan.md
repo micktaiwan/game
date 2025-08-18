@@ -146,4 +146,5 @@ Façade (client) — description (sans code):
 ### 4. Shared/types
 
 - `imports/shared/constants` (added: `TILE_RADIUS`), `colors` (moved `colorForGoal`), `log`
+- `imports/shared/ui` (UI constants: opacities, fades)
 - JSDoc/TS for Unit/Tile/Resource/Base

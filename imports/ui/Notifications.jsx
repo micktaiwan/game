@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { UI_TIME_OPACITY_BASE, UI_TIME_OPACITY_FLOOR, UI_TEXT_OPACITY_BASE, UI_TEXT_OPACITY_FLOOR, UI_OPACITY_DIM } from '/imports/shared/ui.js';
 
 function formatTime(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -57,8 +58,8 @@ export function Notifications({ messages, onDismiss, fadeMs = 60000 }) {
           ? `rgba(0,146,88,${0.2 * alpha})`
           : `rgba(14,20,27,${0.7 * alpha})`;
         const border = m.level === 'danger' ? '#ff6b6b' : m.level === 'success' ? '#32d296' : '#e6edf3';
-        const textOpacity = 0.85 * alpha + 0.15; // keep readable
-        const timeOpacity = 0.6 * alpha + 0.2;
+        const textOpacity = UI_TEXT_OPACITY_BASE * alpha + UI_TEXT_OPACITY_FLOOR; // keep readable
+        const timeOpacity = UI_TIME_OPACITY_BASE * alpha + UI_TIME_OPACITY_FLOOR;
         const isClosing = !!m.closing;
         const scale = isClosing ? 0.98 : 1;
         const closeOpacity = isClosing ? 0 : 1;
@@ -94,7 +95,7 @@ export function Notifications({ messages, onDismiss, fadeMs = 60000 }) {
                 background: 'transparent',
                 border: 'none',
                 color: '#e6edf3',
-                opacity: 0.6,
+                opacity: UI_OPACITY_DIM,
                 cursor: 'pointer'
               }}
               title="Dismiss"

@@ -1,4 +1,5 @@
 import React from 'react';
+import { UI_OPACITY_DIM } from '/imports/shared/ui.js';
 import { Meteor } from 'meteor/meteor';
 
 export const SelectionInfo = ({ uiVisible, selectedUnitId, selectedResourceId, units, resources, pushMessage }) => (
@@ -16,7 +17,7 @@ export const SelectionInfo = ({ uiVisible, selectedUnitId, selectedResourceId, u
       {selectedUnitId ? (
         (() => {
           const u = units.find(x => x._id === selectedUnitId);
-          if (!u) return <div style={{ opacity: 0.6 }}>No unit</div>;
+          if (!u) return <div style={{ opacity: UI_OPACITY_DIM }}>No unit</div>;
           const effectiveGoal = (u.goal || ((u.type || 'scout') === 'soldier' ? 'defend' : 'idle'));
           const modeColorMap = { idle: '#32d296', harvest: '#ffd166', explore: '#bc66ff', defend: '#2da8ff', attack: '#ff4d4d' };
           const modeColor = modeColorMap[effectiveGoal] || '#e6edf3';
@@ -44,7 +45,7 @@ export const SelectionInfo = ({ uiVisible, selectedUnitId, selectedResourceId, u
       ) : selectedResourceId ? (
         (() => {
           const r = resources.find(x => x._id === selectedResourceId);
-          if (!r) return <div style={{ opacity: 0.6 }}>No resource</div>;
+          if (!r) return <div style={{ opacity: UI_OPACITY_DIM }}>No resource</div>;
           return (
             <div style={{ pointerEvents: 'auto' }}>
               <div>Resource: <strong>{r.kind.toUpperCase()}</strong> @ (q={r.q}, r={r.r})</div>
@@ -54,7 +55,7 @@ export const SelectionInfo = ({ uiVisible, selectedUnitId, selectedResourceId, u
           );
         })()
       ) : (
-        <div style={{ opacity: 0.6 }}>No selection</div>
+        <div style={{ opacity: UI_OPACITY_DIM }}>No selection</div>
       )}
     </div>
   </div>

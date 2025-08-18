@@ -73,7 +73,11 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   function applyGfxSettings(next) {
     gfx = { ...gfx, ...next };
     const ensureLightGizmoRef = () => { lightGizmo = ensureLightGizmo(debugGroup, light, lightGizmo); };
-    applyGfxSettingsExt(gfx, { renderer, ambient, scene, bloomPass, fxaaPass, ssaoPass, tileMeshByKey, outlineMaterial, skyMat, light, ensureLightGizmoRef });
+    const hideLightGizmoRef = () => { if (lightGizmo) lightGizmo.visible = false; };
+    applyGfxSettingsExt(
+      gfx,
+      { renderer, ambient, scene, bloomPass, fxaaPass, ssaoPass, tileMeshByKey, outlineMaterial, skyMat, light, ensureLightGizmoRef, hideLightGizmoRef }
+    );
   }
 
   // Initial preset will be applied after gfx is initialized below

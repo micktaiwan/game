@@ -300,6 +300,29 @@ export const App = () => {
     window.addEventListener('mousedown', onGlobalMouseDown);
     return () => window.removeEventListener('mousedown', onGlobalMouseDown);
   }, [ccMenu.open]);
+
+  // Clamp CC menu to viewport and offset slightly from pointer
+  useEffect(() => {
+    if (!ccMenu.open) return;
+    const el = menuRef.current;
+    if (!el) return;
+    // allow DOM to paint then measure
+    const id = requestAnimationFrame(() => {
+      const rect = el.getBoundingClientRect();
+      const margin = 10;
+      const offset = 8;
+      let targetX = ccMenu.x + offset;
+      let targetY = ccMenu.y + offset;
+      const maxX = window.innerWidth - rect.width - margin;
+      const maxY = window.innerHeight - rect.height - margin;
+      targetX = Math.max(margin, Math.min(targetX, maxX));
+      targetY = Math.max(margin, Math.min(targetY, maxY));
+      if (targetX !== ccMenu.x || targetY !== ccMenu.y) {
+        setCcMenu((m) => ({ ...m, x: targetX, y: targetY }));
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [ccMenu.open, ccMenu.x, ccMenu.y]);
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
@@ -321,14 +344,12 @@ export const App = () => {
         pushMessage={pushMessage}
       />
       <UnitPanel ccMenu={ccMenu} menuRef={menuRef} base={base} spawnScout={spawnScout} spawnSoldier={spawnSoldier} />
-      <div style={{ position: 'fixed', top: 10, left: 10, zIndex: 10, pointerEvents: uiVisible ? 'auto' : 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
+      <div style={{ position: 'fixed', top: 10, left: 10, zIndex: 10, pointerEvents: uiVisible ? 'auto' : 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease', display: 'flex', gap: 8, alignItems: 'center' }}>
         <TopBar
           onResetView={() => apiRef.current && apiRef.current.resetView && apiRef.current.resetView()}
           onToggleGfx={() => { const next = !showGfx; setShowGfx(next); apiRef.current?.applyGfxSettings?.({ showLightGizmo: next }); }}
           showGfx={showGfx}
         />
-      </div>
-      <div style={{ position: 'fixed', top: 10, left: 360, zIndex: 10, pointerEvents: uiVisible ? 'auto' : 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
         <button
           onClick={async () => { await resetGame({ apiRef, setSceneNonce, setMessages, setCcMenu }); }}
           style={{
