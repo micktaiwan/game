@@ -1,23 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSubscribe, useFind } from 'meteor/react-meteor-data';
-import { createThreeApp } from '/imports/game/scene/createThreeApp';
+// createThreeApp is used inside useSceneBridge
 import { TilesCollection } from '/imports/api/tiles';
 import { UnitsCollection } from '/imports/api/units';
 import { ResourcesCollection } from '/imports/api/resources';
 import { BasesCollection } from '/imports/api/bases';
 import { Meteor } from 'meteor/meteor';
 import { Notifications } from '/imports/ui/Notifications.jsx';
+import { TopBar } from '/imports/ui/components/TopBar.jsx';
+import { GfxPanel } from '/imports/ui/components/GfxPanel.jsx';
+import { SelectionInfo } from '/imports/ui/components/SelectionInfo.jsx';
+import { ResourcePanel } from '/imports/ui/components/ResourcePanel.jsx';
+import { UnitPanel } from '/imports/ui/components/UnitPanel.jsx';
+import { useSceneBridge } from '/imports/ui/hooks/useSceneBridge.js';
+import { useUnitHotkeys } from '/imports/ui/hooks/useUnitHotkeys.js';
 
 /**
  * Top-level UI component. Client is authoritative for base placement.
  * Subscribes to Meteor collections and synchronizes the 3D scene via an imperative API.
  */
 export const App = () => {
-  const mountRef = useRef(null);
-  const apiRef = useRef(null);
   const menuRef = useRef(null);
-  const selectedUnitRef = useRef(null);
-  const unitsRef = useRef([]);
   // Subscriptions (tiles/units/resources/base)
   const isLoadingTiles = useSubscribe('tiles');
   const isLoadingUnits = useSubscribe('units');
@@ -60,6 +63,7 @@ export const App = () => {
   const [showGfx, setShowGfx] = useState(false);
   // Low energy prompt logic: show on crossing below 20, hide on click, re-show after rising >=20 then falling again
   const [showLowEnergyPrompt, setShowLowEnergyPrompt] = useState(false);
+  useUnitHotkeys({ selectedUnitId, pushMessage });
 
   function pushMessage(text, level = 'info') {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -99,142 +103,21 @@ export const App = () => {
     });
   }
 
-  useEffect(() => {
-    if (isLoadingTiles() || isLoadingUnits() || isLoadingResources() || isLoadingBases()) return;
-    const container = mountRef.current;
-    if (!container) return;
-    const tilesData = tiles.map(t => ({ q: t.q, r: t.q ? t.r : t.r }));
-    // Decide authoritative base position: if not set, compute south-most via scene heuristic
-    const basePos = (base && typeof base.baseQ === 'number') ? { q: base.baseQ, r: base.baseR } : null;
-    apiRef.current = createThreeApp(container, tilesData, {
-      base: basePos,
-      onBaseCandidate: async ({ q, r }) => {
-        // Persist base position exactly once after a reset when the DB has no baseQ/baseR
-        if (!(base && typeof base.baseQ === 'number')) {
-          try { await Meteor.callAsync('base.setPosition', { q, r }); } catch (e) {}
-        }
-      },
-      onSelectCommandCenter: ({ tile, pointer }) => {
-        // Reset current selection when CC is clicked
-        setSelectedUnitId(null);
-        setSelectedResourceId(null);
-        if (apiRef.current?.setSelectedUnitId) apiRef.current.setSelectedUnitId(null);
-        selectedUnitRef.current = null;
-        if (pointer) {
-          setCcMenu({ open: true, q: tile.q, r: tile.r, x: pointer.x, y: pointer.y });
-        }
-      },
-      onSelectUnit: ({ unit }) => {
-        if (!unit) return;
-        setSelectedUnitId(unit._id);
-        setSelectedResourceId(null);
-        if (apiRef.current?.setSelectedUnitId) apiRef.current.setSelectedUnitId(unit._id);
-        selectedUnitRef.current = unit._id;
-      },
-      onSelectResource: async ({ resource }) => {
-        if (!resource) return;
-        // If a scout is currently selected, auto-switch it to harvest mode
-        const selId = selectedUnitRef.current;
-        if (selId) {
-          const unit = UnitsCollection.findOne({ _id: selId });
-          if (unit && (unit.type || 'scout') === 'scout') {
-            try {
-              await Meteor.callAsync('units.setGoal', { unitId: selId, goal: 'harvest' });
-              pushMessage('Scout set to Harvest', 'success');
-              // Keep the scout selected; also show resource info in the panel
-              setSelectedResourceId(resource._id);
-              return;
-            } catch (e) {
-              pushMessage(`Failed to set harvest: ${e?.reason || e?.message}`, 'danger');
-            }
-          }
-        }
-        // Default: select the resource and clear unit selection
-        setSelectedUnitId(null);
-        if (apiRef.current?.setSelectedUnitId) apiRef.current.setSelectedUnitId(null);
-        setSelectedResourceId(resource._id);
-        selectedUnitRef.current = null;
-      },
-      onExploreDirection: async ({ direction }) => {
-        const id = selectedUnitRef.current;
-        if (!id) return;
-        const uType = UnitsCollection.findOne({ _id: id })?.type || 'scout';
-        if (uType !== 'scout') return; // explore only for scouts
-        try {
-          await Meteor.callAsync('units.setGoal', { unitId: id, goal: 'explore', goalData: { direction } });
-          pushMessage('Explore mode set', 'success');
-        } catch (e) {
-          pushMessage(`Failed to set explore: ${e?.reason || e?.message}`, 'danger');
-        }
-      },
-      onClickTile: async ({ tile }) => {
-        const selectedId = selectedUnitRef.current;
-        const unitsNow = unitsRef.current || [];
-        // 1) If a unit is on this tile: select it
-        const unitOnTile = unitsNow.find(u => u.q === tile.q && u.r === tile.r);
-        if (unitOnTile) {
-          setSelectedUnitId(unitOnTile._id);
-          setSelectedResourceId(null);
-          if (apiRef.current?.setSelectedUnitId) apiRef.current.setSelectedUnitId(unitOnTile._id);
-          selectedUnitRef.current = unitOnTile._id;
-          return;
-        }
-        // 2) If a resource is on this tile: select it, or harvest if a scout is selected
-        const resOnTile = resources.find(r => r.q === tile.q && r.r === tile.r);
-        if (resOnTile) {
-          if (selectedId) {
-            const selUnit = UnitsCollection.findOne({ _id: selectedId }) || unitsNow.find(u => u._id === selectedId);
-            if (selUnit && (selUnit.type || 'scout') === 'scout') {
-              try {
-                await Meteor.callAsync('units.setGoal', { unitId: selectedId, goal: 'harvest' });
-                setSelectedResourceId(resOnTile._id);
-                pushMessage('Harvest mode set', 'success');
-                return;
-              } catch (e) {
-                pushMessage(`Failed to set harvest: ${e?.reason || e?.message}`, 'danger');
-              }
-            }
-          }
-          // Default: just show the resource
-          setSelectedResourceId(resOnTile._id);
-          if (apiRef.current?.setSelectedUnitId) apiRef.current.setSelectedUnitId(null);
-          setSelectedUnitId(null);
-          selectedUnitRef.current = null;
-          return;
-        }
-        // 3) Otherwise, if a scout is currently selected: issue Explore towards that tile
-        if (selectedId) {
-          const unit = UnitsCollection.findOne({ _id: selectedId }) || unitsNow.find(u => u._id === selectedId);
-          if (!unit) {
-            console.warn('[UI] Selected unit not found in client cache', { id: selectedId, unitsCount: unitsNow.length });
-            pushMessage('Selected unit not found. Please reselect.', 'danger');
-            return;
-          }
-          if ((unit.type || 'scout') !== 'scout') return; // only scouts can explore via tile click
-          const radius = 0.6;
-          const wp = (q, r) => ({ x: radius * (3/2) * q, z: radius * Math.sqrt(3) * (r + q/2) });
-          const a = wp(unit.q, unit.r);
-          const b = wp(tile.q, tile.r);
-          const dx = b.x - a.x;
-          const dz = b.z - a.z;
-          try {
-            await Meteor.callAsync('units.setGoal', { unitId: selectedId, goal: 'explore', goalData: { direction: { x: dx, z: dz } } });
-            pushMessage('Explore mode set', 'success');
-          } catch (e) {
-            pushMessage(`Failed to set explore: ${e?.reason || e?.message}`, 'danger');
-          }
-        }
-      },
-      units: units.map(u => ({ _id: u._id, type: u.type, q: u.q, r: u.r, hp: u.hp, energy: u.energy, goal: u.goal, prevQ: u.prevQ, prevR: u.prevR, lastMoveAt: u.lastMoveAt, buildHoldUntil: u.buildHoldUntil })),
-      resources: resources.map(res => ({ _id: res._id, kind: res.kind, q: res.q, r: res.r, amount: res.amount }))
-    });
-    // Intro messages removed to avoid noise
-    // End of reset cycle if any
-    if (isResetting) setIsResetting(false);
-    // Reset intro run flag on scene (re)creation
-    hasIntroRunRef.current = false;
-    return () => apiRef.current && apiRef.current.cleanup && apiRef.current.cleanup();
-  }, [isLoadingTiles(), isLoadingUnits(), isLoadingResources(), isLoadingBases(), sceneNonce]);
+  const { apiRef, mountRef, selectedUnitRef } = useSceneBridge({
+    tiles,
+    units,
+    resources,
+    base,
+    isLoadingTiles,
+    isLoadingUnits,
+    isLoadingResources,
+    isLoadingBases,
+    sceneNonce,
+    setCcMenu,
+    setSelectedUnitId,
+    setSelectedResourceId,
+    pushMessage,
+  });
 
   // Schedule UI fade-in after scene intro (based on tile count and stagger used in scene)
   useEffect(() => {
@@ -286,7 +169,6 @@ export const App = () => {
     if (!apiRef.current) return;
     const nextUnits = units.map(u => ({ _id: u._id, type: u.type, q: u.q, r: u.r, hp: u.hp, energy: u.energy, goal: u.goal, prevQ: u.prevQ, prevR: u.prevR, lastMoveAt: u.lastMoveAt, buildHoldUntil: u.buildHoldUntil }));
     if (apiRef.current.setUnits) apiRef.current.setUnits(nextUnits);
-    unitsRef.current = units;
   }, [units.map(u => u._id + ':' + u.q + ',' + u.r + ':' + (u.goal || 'idle')).join('|')]);
 
   // Refresh scene tiles when tiles collection changes (newly discovered tiles)
@@ -422,200 +304,34 @@ export const App = () => {
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
       {/* Selection HUD */}
-      <div style={{ position: 'fixed', bottom: 10, right: 10, zIndex: 12, pointerEvents: 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(8px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
-        <div style={{
-          background: 'rgba(14,20,27,0.7)',
-          color: '#e6edf3',
-          border: '1px solid #e6edf3',
-          borderRadius: 6,
-          padding: '8px 10px',
-          fontSize: 14,
-          minWidth: 220,
-        }}>
-          <div style={{ opacity: 0.8, fontSize: 12, marginBottom: 4 }}>Selection</div>
-          {selectedUnitId ? (
-            (() => {
-              const u = units.find(x => x._id === selectedUnitId);
-              if (!u) return <div style={{ opacity: 0.6 }}>No unit</div>;
-              const effectiveGoal = (u.goal || ((u.type || 'scout') === 'soldier' ? 'defend' : 'idle'));
-              const modeColorMap = {
-                idle: '#32d296',
-                harvest: '#ffd166',
-                explore: '#bc66ff',
-                defend: '#2da8ff',
-                attack: '#ff4d4d'
-              };
-              const modeColor = modeColorMap[effectiveGoal] || '#e6edf3';
-              return (
-                <div style={{ pointerEvents: 'auto' }}>
-                  <div>Unit: <strong>{u.type.toUpperCase()}</strong> @ (q={u.q}, r={u.r})</div>
-                  <div>Mode: <strong style={{ color: modeColor }}>{effectiveGoal.toUpperCase()}</strong></div>
-                  { (u.type || 'scout') === 'soldier' ? (
-                    <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
-                      <button onClick={async () => { await Meteor.callAsync('units.setGoal', { unitId: u._id, goal: 'defend' }); }} style={{ cursor: 'pointer' }}>I/D: Defend</button>
-                      <button onClick={async () => { await Meteor.callAsync('units.setGoal', { unitId: u._id, goal: 'attack' }); }} style={{ cursor: 'pointer' }}>A: Attack</button>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
-                        <button onClick={async () => { await Meteor.callAsync('units.setGoal', { unitId: u._id, goal: 'idle' }); }} style={{ cursor: 'pointer' }}>I: Idle</button>
-                        <button onClick={async () => { await Meteor.callAsync('units.setGoal', { unitId: u._id, goal: 'harvest' }); }} style={{ cursor: 'pointer' }}>H: Harvest</button>
-                      </div>
-                      <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>Click a tile to Explore towards it</div>
-                    </>
-                  )}
-                </div>
-              );
-            })()
-          ) : selectedResourceId ? (
-            (() => {
-              const r = resources.find(x => x._id === selectedResourceId);
-              if (!r) return <div style={{ opacity: 0.6 }}>No resource</div>;
-              return (
-                <div style={{ pointerEvents: 'auto' }}>
-                  <div>Resource: <strong>{r.kind.toUpperCase()}</strong> @ (q={r.q}, r={r.r})</div>
-                  <div>Reward: <strong>{r.amount}</strong></div>
-                  <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>Harvest gives the reward to the Command Center.</div>
-                </div>
-              );
-            })()
-          ) : (
-            <div style={{ opacity: 0.6 }}>No selection</div>
-          )}
-        </div>
-      </div>
+      <SelectionInfo
+        uiVisible={uiVisible}
+        selectedUnitId={selectedUnitId}
+        selectedResourceId={selectedResourceId}
+        units={units}
+        resources={resources}
+        pushMessage={pushMessage}
+      />
       {/* HUD: base stockpile */}
-      <div style={{ position: 'fixed', top: 10, right: 10, zIndex: 12, pointerEvents: 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
-        <div style={{
-          background: 'rgba(14,20,27,0.7)',
-          color: '#e6edf3',
-          border: '1px solid #e6edf3',
-          borderRadius: 6,
-          padding: '8px 10px',
-          fontSize: 14,
-          minWidth: 180,
-          textAlign: 'right'
-        }}>
-          <div style={{ opacity: 0.8, fontSize: 12, marginBottom: 4, textAlign: 'left' }}>Command Center</div>
-          <div>Energy: <strong>{base?.energy ?? '—'}</strong></div>
-          <div>Metal: <strong>{base?.metal ?? '—'}</strong></div>
-          {(typeof base?.energy === 'number' && base.energy < 20 && showLowEnergyPrompt) && (
-            <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
-              <span style={{ color: '#ffb86b', fontSize: 12 }}>Low Energy</span>
-              <button
-                onClick={async () => {
-                  await Meteor.callAsync('units.stopAll');
-                  pushMessage('STOP: Scouts set to Idle', 'danger');
-                  // Hide until energy recovers to >=20 and falls again
-                  setShowLowEnergyPrompt(false);
-                }}
-                style={{
-                  background: 'rgba(146,0,0,0.2)',
-                  color: '#ff6b6b',
-                  border: '1px solid #ff6b6b',
-                  borderRadius: 6,
-                  padding: '4px 8px',
-                  fontSize: 12,
-                  cursor: 'pointer'
-                }}
-                title="Stop all energy-costly actions (Scouts to Idle)"
-              >
-                STOP Units
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-      {ccMenu.open && (
-        <div ref={menuRef} style={{ position: 'fixed', left: ccMenu.x, top: ccMenu.y, zIndex: 15, pointerEvents: 'auto' }}>
-          <div style={{
-            background: 'rgba(14,20,27,0.95)',
-            color: '#e6edf3',
-            border: '1px solid #e6edf3',
-            borderRadius: 6,
-            padding: 8,
-            minWidth: 160
-          }}>
-            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>Command Center</div>
-            <button
-              onClick={spawnScout}
-              disabled={(base?.metal ?? 0) < 20}
-              style={{
-                width: '100%',
-                background: (base?.metal ?? 0) < 20 ? 'rgba(14,20,27,0.4)' : 'rgba(0,146,88,0.2)',
-                color: (base?.metal ?? 0) < 20 ? '#6b7785' : '#32d296',
-                border: `1px solid ${(base?.metal ?? 0) < 20 ? '#6b7785' : '#32d296'}`,
-                borderRadius: 4,
-                padding: '6px 8px',
-                fontSize: 13,
-                cursor: (base?.metal ?? 0) < 20 ? 'not-allowed' : 'pointer'
-              }}
-              title="Produce a Scout unit (20 Metal)"
-            >
-              Spawn Scout (20 Metal)
-            </button>
-            <button
-              onClick={spawnSoldier}
-              disabled={(base?.metal ?? 0) < 30}
-              style={{
-                marginTop: 6,
-                width: '100%',
-                background: (base?.metal ?? 0) < 30 ? 'rgba(14,20,27,0.4)' : 'rgba(0,88,146,0.2)',
-                color: (base?.metal ?? 0) < 30 ? '#6b7785' : '#2da8ff',
-                border: `1px solid ${(base?.metal ?? 0) < 30 ? '#6b7785' : '#2da8ff'}`,
-                borderRadius: 4,
-                padding: '6px 8px',
-                fontSize: 13,
-                cursor: (base?.metal ?? 0) < 30 ? 'not-allowed' : 'pointer'
-              }}
-              title="Produce a Soldier unit (30 Metal)"
-            >
-              Spawn Soldier (30 Metal)
-            </button>
-          </div>
-        </div>
-      )}
+      <ResourcePanel
+        uiVisible={uiVisible}
+        base={base}
+        showLowEnergyPrompt={showLowEnergyPrompt}
+        setShowLowEnergyPrompt={setShowLowEnergyPrompt}
+        pushMessage={pushMessage}
+      />
+      <UnitPanel ccMenu={ccMenu} menuRef={menuRef} base={base} spawnScout={spawnScout} spawnSoldier={spawnSoldier} />
       <div style={{ position: 'fixed', top: 10, left: 10, zIndex: 10, pointerEvents: uiVisible ? 'auto' : 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
+        <TopBar
+          onResetView={() => apiRef.current && apiRef.current.resetView && apiRef.current.resetView()}
+          onToggleGfx={() => { const next = !showGfx; setShowGfx(next); apiRef.current?.applyGfxSettings?.({ showLightGizmo: next }); }}
+          showGfx={showGfx}
+        />
+      </div>
+      <div style={{ position: 'fixed', top: 10, left: 360, zIndex: 10, pointerEvents: uiVisible ? 'auto' : 'none', opacity: uiVisible ? 1 : 0, transform: uiVisible ? 'translateY(0px)' : 'translateY(-6px)', transition: 'opacity 400ms ease, transform 400ms ease' }}>
         <button
-          onClick={() => apiRef.current && apiRef.current.resetView && apiRef.current.resetView()}
+          onClick={async () => { await resetGame({ apiRef, setSceneNonce, setMessages, setCcMenu }); }}
           style={{
-            background: 'rgba(14,20,27,0.7)',
-            color: '#e6edf3',
-            border: '1px solid #e6edf3',
-            borderRadius: 6,
-            padding: '6px 10px',
-            fontSize: 12,
-            cursor: 'pointer'
-          }}
-        >
-          Reset view
-        </button>
-        <button
-          onClick={() => {
-            const next = !showGfx;
-            setShowGfx(next);
-            apiRef.current?.applyGfxSettings?.({ showLightGizmo: next });
-          }}
-          style={{
-            marginLeft: 8,
-            background: 'rgba(14,20,27,0.7)',
-            color: '#e6edf3',
-            border: '1px solid #e6edf3',
-            borderRadius: 6,
-            padding: '6px 10px',
-            fontSize: 12,
-            cursor: 'pointer'
-          }}
-          title="Toggle GFX panel"
-        >
-          {showGfx ? 'Hide GFX' : 'Show GFX'}
-        </button>
-        <button
-          onClick={async () => {
-            await resetGame({ apiRef, setSceneNonce, setMessages, setCcMenu });
-          }}
-          style={{
-            marginLeft: 8,
             background: 'rgba(146,0,0,0.2)',
             color: '#ff6b6b',
             border: '1px solid #ff6b6b',
@@ -631,64 +347,7 @@ export const App = () => {
       </div>
       {/* GFX Controls */}
       {showGfx && (
-        <div style={{ position: 'fixed', top: 10, left: 180, zIndex: 14, pointerEvents: 'auto', background: 'rgba(14,20,27,0.9)', color: '#e6edf3', border: '1px solid #e6edf3', borderRadius: 6, padding: 8, width: 260 }}>
-          <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>GFX</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 6, alignItems: 'center' }}>
-            <label style={{ fontSize: 12 }}>Exposure</label>
-            <input type="range" min="0.3" max="3.0" step="0.02" value={gfxUI.exposure} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, exposure: v })); apiRef.current?.applyGfxSettings?.({ exposure: v }); }} />
-            <label style={{ fontSize: 12 }}>Ambient</label>
-            <input type="range" min="0.2" max="1.5" step="0.02" value={gfxUI.ambientIntensity} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, ambientIntensity: v })); apiRef.current?.applyGfxSettings?.({ ambientIntensity: v }); }} />
-            <label style={{ fontSize: 12 }}>Bloom</label>
-            <input type="checkbox" checked={gfxUI.bloomEnabled} onChange={(e) => { const v = e.target.checked; setGfxUI(s=>({ ...s, bloomEnabled: v })); apiRef.current?.applyGfxSettings?.({ bloomEnabled: v }); }} />
-            <label style={{ fontSize: 12 }}>Bloom Str.</label>
-            <input type="range" min="0" max="1" step="0.01" value={gfxUI.bloomStrength} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, bloomStrength: v })); apiRef.current?.applyGfxSettings?.({ bloomStrength: v }); }} />
-            <label style={{ fontSize: 12 }}>Bloom Thr.</label>
-            <input type="range" min="0" max="1" step="0.01" value={gfxUI.bloomThreshold} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, bloomThreshold: v })); apiRef.current?.applyGfxSettings?.({ bloomThreshold: v }); }} />
-            <label style={{ fontSize: 12 }}>FXAA</label>
-            <input type="checkbox" checked={gfxUI.fxaaEnabled} onChange={(e) => { const v = e.target.checked; setGfxUI(s=>({ ...s, fxaaEnabled: v })); apiRef.current?.applyGfxSettings?.({ fxaaEnabled: v }); }} />
-            <label style={{ fontSize: 12 }}>Fog</label>
-            <input type="checkbox" checked={gfxUI.fogEnabled} onChange={(e) => { const v = e.target.checked; setGfxUI(s=>({ ...s, fogEnabled: v })); apiRef.current?.applyGfxSettings?.({ fogEnabled: v }); }} />
-            <label style={{ fontSize: 12 }}>Fog dens.</label>
-            <input type="range" min="0" max="0.02" step="0.0005" value={gfxUI.fogDensity} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, fogDensity: v })); apiRef.current?.applyGfxSettings?.({ fogDensity: v }); }} />
-            <label style={{ fontSize: 12 }}>Tiles emissive</label>
-            <input type="range" min="0" max="2.0" step="0.01" value={gfxUI.tileEmissiveIntensity} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, tileEmissiveIntensity: v })); apiRef.current?.applyGfxSettings?.({ tileEmissiveIntensity: v }); }} />
-            <label style={{ fontSize: 12 }}>Tile brightness</label>
-            <input type="range" min="0.3" max="2.0" step="0.01" value={gfxUI.tileBrightness} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, tileBrightness: v })); apiRef.current?.applyGfxSettings?.({ tileBrightness: v }); }} />
-            <label style={{ fontSize: 12 }}>Outline intensity</label>
-            <input type="range" min="0.2" max="1.0" step="0.01" value={gfxUI.outlineOpacity} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, outlineOpacity: v })); apiRef.current?.applyGfxSettings?.({ outlineOpacity: v }); }} />
-            <label style={{ fontSize: 12 }}>Light L↔R (deg)</label>
-            <input type="range" min="-180" max="180" step="1" value={gfxUI.dirLightAzimuthDeg} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, dirLightAzimuthDeg: v })); apiRef.current?.applyGfxSettings?.({ dirLightAzimuthDeg: v }); }} />
-            <label style={{ fontSize: 12 }}>Light auto-orbit</label>
-            <input type="checkbox" checked={gfxUI.dirLightAutoOrbit} onChange={(e) => { const v = e.target.checked; setGfxUI(s=>({ ...s, dirLightAutoOrbit: v })); apiRef.current?.applyGfxSettings?.({ dirLightAutoOrbit: v }); }} />
-            <label style={{ fontSize: 12 }}>Orbit speed (deg/s)</label>
-            <input type="range" min="0" max="90" step="1" value={gfxUI.dirLightOrbitSpeedDeg} onChange={(e) => { const v = parseFloat(e.target.value); setGfxUI(s=>({ ...s, dirLightOrbitSpeedDeg: v })); apiRef.current?.applyGfxSettings?.({ dirLightOrbitSpeedDeg: v }); }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-            <button
-              onClick={async () => {
-                try {
-                  const settings = apiRef.current?.getGfxSettings?.() || {};
-                  const json = JSON.stringify(settings, null, 2);
-                  await navigator.clipboard.writeText(json);
-                  pushMessage('GFX settings copied to clipboard', 'success');
-                } catch (e) {
-                  pushMessage('Failed to copy GFX settings', 'danger');
-                }
-              }}
-              style={{
-                background: 'rgba(14,20,27,0.7)',
-                color: '#e6edf3',
-                border: '1px solid #e6edf3',
-                borderRadius: 6,
-                padding: '4px 8px',
-                fontSize: 12,
-                cursor: 'pointer'
-              }}
-            >
-              Copy JSON
-            </button>
-          </div>
-        </div>
+        <GfxPanel gfxUI={gfxUI} setGfxUI={setGfxUI} apiRef={apiRef} pushMessage={pushMessage} />
       )}
       <div style={{ opacity: uiVisible ? 1 : 0, transition: 'opacity 500ms ease 50ms', pointerEvents: uiVisible ? 'auto' : 'none' }}>
       <Notifications messages={messages} onDismiss={dismissMessage} />

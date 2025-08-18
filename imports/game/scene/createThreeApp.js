@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createGoalIndicator, updateGoalIndicator, createBeamTexture, colorForGoal } from './indicators/goalIndicator';
+import { createGoalIndicator, updateGoalIndicator } from './indicators/goalIndicator';
 import { ensureLightGizmo } from './gizmos/lightGizmo';
 import { buildScoutMesh } from './units/buildScout';
 import { buildSoldierMesh } from './units/buildSoldier';
@@ -8,10 +8,17 @@ import { ensureResourcesRendered as ensureResourcesRenderedExt } from './resourc
 import { ensureTilesRendered as ensureTilesRenderedExt } from './tiles/index';
 import { axialToWorld as axialToWorldFn } from './math/axial';
 import { animateScouts } from './units/animate';
+import { buildCommandCenterTripod } from './props/commandCenter';
+import { createStarfield } from './core/starfield';
 import { createScene } from './core/createScene';
 import { createPostProcess } from './core/postprocess';
 import { installInputHandlers } from './core/input';
 import { defaultGfx, applyGfxSettings as applyGfxSettingsExt } from './core/gfxSettings';
+import { createTileBurstSystem } from './effects/tileBurst';
+import { createSelectionRings } from './ui/selectionRings';
+import { screenToNdc, pickFirst } from './core/picking';
+import { handleClickPick } from './core/pickingHandlers';
+import { TILE_RADIUS } from '/imports/shared/constants.js';
 
 function axialToWorld(q, r, radius) {
   const p = axialToWorldFn(q, r, radius);
@@ -35,10 +42,9 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     throw new Error('createThreeApp: containerElement is required');
   }
 
-  // Scene
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0f1115);
-  // Skybox gradient via large inverted sphere
+  // Scene core (creates scene, camera, renderer and attaches canvas)
+  const { scene, camera, renderer } = createScene(containerElement);
+  // Skybox gradient via large inverted sphere (kept here so GFX can tweak it)
   const skyGeo = new THREE.SphereGeometry(300, 16, 12);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -57,63 +63,9 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   // Fog disabled for now (tiles visibility first)
   scene.fog = null;
 
-  function createCircularTexture(size = 64) {
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.7, 'rgba(255,255,255,0.6)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-    ctx.fill();
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.anisotropy = 1;
-    return texture;
-  }
+  // moved starfield creation to core/starfield
 
-  function createStarfield(radius) {
-    const stars = new THREE.BufferGeometry();
-    const starCount = 1500;
-    const positions = new Float32Array(starCount * 3);
-    for (let i = 0; i < starCount; i += 1) {
-      // Random on sphere shell
-      const u = Math.random();
-      const v = Math.random();
-      const theta = 2 * Math.PI * u;
-      const phi = Math.acos(2 * v - 1);
-      const r = radius * (0.9 + 0.2 * Math.random());
-      const x = r * Math.sin(phi) * Math.cos(theta);
-      const y = r * Math.cos(phi);
-      const z = r * Math.sin(phi) * Math.sin(theta);
-      positions[i * 3 + 0] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
-    }
-    stars.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xffffff,
-      size: 0.35,
-      sizeAttenuation: true,
-      transparent: true,
-      opacity: 0.95,
-      map: createCircularTexture(64),
-      alphaTest: 0.15,
-      depthWrite: false
-    });
-    const points = new THREE.Points(stars, mat);
-    points.name = 'starfield';
-    return points;
-  }
-
-  // Scene core
-  const { scene: sceneFromCore, camera, renderer } = createScene(containerElement);
-  // Replace local scene reference with core scene
-  // (we created sky/scene earlier; ensure we keep same scene reference)
-  // We already use 'scene' below; keep as is
+  // Scene was created above; nothing else to do here
 
   // Postprocessing
   const { composer, ssaoPass, bloomPass, fxaaPass } = createPostProcess(renderer, scene, camera, containerElement);
@@ -130,71 +82,12 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     return { ...gfx };
   }
 
-  function buildCommandCenterTripod(group, platformRadius, platformHeight) {
-    const platform = new THREE.Mesh(
-      new THREE.CylinderGeometry(platformRadius, platformRadius, platformHeight, 24),
-      new THREE.MeshStandardMaterial({ color: 0x7f95ad, metalness: 0.25, roughness: 0.55 })
-    );
-    platform.position.y = platformHeight / 2;
-    group.add(platform);
+  // moved CC builder to props/commandCenter
 
-    // Central reactor core
-    const core = new THREE.Mesh(
-      new THREE.CylinderGeometry(platformRadius * 0.22, platformRadius * 0.22, platformHeight * 1.2, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x32d296, emissiveIntensity: 1.8, roughness: 0.25 })
-    );
-    core.position.y = platformHeight * 1.1;
-    group.add(core);
-
-    // Three capacitors around
-    const capRadius = platformRadius * 0.18;
-    const capHeight = platformHeight * 2.8; // taller to showcase breathing FX
-    const capMat = new THREE.MeshStandardMaterial({ color: 0x9fb3c8, metalness: 0.35, roughness: 0.4, emissive: 0x1b2a35, emissiveIntensity: 0.3 });
-    for (let i = 0; i < 3; i++) {
-      const a = i * (Math.PI * 2 / 3);
-      const r = platformRadius * 0.58;
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(capRadius, capRadius * 0.9, capHeight, 14), capMat);
-      cap.position.set(Math.cos(a) * r, platformHeight + capHeight / 2, Math.sin(a) * r);
-      group.add(cap);
-    }
-
-    // Halo ring
-    const halo = new THREE.Mesh(
-      new THREE.TorusGeometry(platformRadius * 0.95, platformRadius * 0.05, 10, 60),
-      new THREE.MeshBasicMaterial({ color: 0x32d296, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending })
-    );
-    halo.rotation.x = Math.PI / 2;
-    halo.position.y = platformHeight * 0.9;
-    group.add(halo);
-
-    group.userData.ccFX = { halo, core, phase: Math.random() * Math.PI * 2 };
-  }
-
-  function spawnEnergySpikes(pos, color, radiusHint = renderRadius) {
-    const count = 64;
-    const geom = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    const velocities = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      positions[i * 3 + 0] = pos.x;
-      positions[i * 3 + 1] = 0.12;
-      positions[i * 3 + 2] = pos.z;
-      const a = Math.random() * Math.PI * 2;
-      const sp = 1.2 + Math.random() * 2.4;
-      velocities[i * 3 + 0] = Math.cos(a) * sp;
-      velocities[i * 3 + 1] = 3.0 + Math.random() * 3.0;
-      velocities[i * 3 + 2] = Math.sin(a) * sp;
-    }
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({ color, size: (radiusHint || renderRadius) * 0.22, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending });
-    const ps = new THREE.Points(geom, mat);
-    ps.userData = { velocities, age: 0, lifespan: 0.5, gravity: -7.0 };
-    effectsGroup.add(ps);
-    activeTileBursts.add(ps);
-  }
+  // spawnEnergySpikes now provided by the tile burst system
 
   // Hex tiles rendering (flat hex discs without thickness)
-  const tileRadius = 0.6; // spacing radius
+  const tileRadius = TILE_RADIUS; // spacing radius
   const gapRatio = 0.02; // 2% gap between tiles
   const renderRadius = tileRadius * (1.0 - gapRatio);
   const hexDisc = new THREE.CircleGeometry(renderRadius, 6);
@@ -223,7 +116,6 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
 
   const tilesGroup = new THREE.Group();
   const outlinesGroup = new THREE.Group();
-  const effectsGroup = new THREE.Group();
   const tileKeys = new Set();
   const tileMeshByKey = new Map();
   const outlineByKey = new Map();
@@ -264,6 +156,13 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   }
   scene.add(tilesGroup);
   scene.add(outlinesGroup);
+  // Initialize effects system now that renderRadius is computed
+  const tileBurst = createTileBurstSystem(renderRadius);
+  const effectsGroup = tileBurst.group;
+  const spawnEnergySpikes = tileBurst.spawnEnergySpikes;
+  const spawnTileSparkBurst = tileBurst.spawnTileSparkBurst;
+  const updateTileBursts = tileBurst.update;
+  const disposeTileBursts = tileBurst.dispose;
   scene.add(effectsGroup);
 
   // Starfield far behind the map
@@ -333,7 +232,6 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   const resourcesGroup = new THREE.Group();
   scene.add(resourcesGroup);
   const resourceMeshesById = new Map();
-  const activeTileBursts = new Set();
   let tilesInitialized = false;
   // Graphics settings (runtime adjustable)
   let gfx = { ...defaultGfx };
@@ -343,22 +241,8 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     requestAnimationFrame(() => applyGfxSettings({}));
   }
   // Selection and hover rings
-  const selectionRing = new THREE.Mesh(
-    new THREE.RingGeometry(renderRadius * 0.85, renderRadius * 0.98, 48),
-    new THREE.MeshBasicMaterial({ color: 0x32d296, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
-  );
-  selectionRing.rotation.x = -Math.PI / 2;
-  selectionRing.position.y = 0.01;
-  selectionRing.visible = false;
+  const { selectionRing, hoverRing } = createSelectionRings(renderRadius);
   scene.add(selectionRing);
-
-  const hoverRing = new THREE.Mesh(
-    new THREE.RingGeometry(renderRadius * 0.9, renderRadius * 1.02, 48),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
-  );
-  hoverRing.rotation.x = -Math.PI / 2;
-  hoverRing.position.y = 0.011;
-  hoverRing.visible = false;
   scene.add(hoverRing);
 
   let currentSelectedUnitId = null;
@@ -387,15 +271,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
 
   // Moved to indicators/goalIndicator.js
 
-  // Moved to indicators/goalIndicator.js
-
-  function colorForGoal(goal) {
-    if (goal === 'harvest') return 0xffd166; // amber
-    if (goal === 'explore') return 0xbc66ff; // violet
-    if (goal === 'defend') return 0x2da8ff; // blue
-    if (goal === 'attack') return 0xff4d4d; // red
-    return 0x32d296; // green idle/default
-  }
+  // colorForGoal imported from indicators/goalIndicator.js
 
   /** Update or remove resource meshes to match the given list. */
   const ensureResourcesRendered = (resourceList) => ensureResourcesRenderedExt(resourcesGroup, resourceMeshesById, axialToWorldVec, renderRadius, resourceList);
@@ -420,91 +296,19 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     tilesInitialized = true;
   }
 
-  function spawnTileSparkBurst(pos) {
-    const count = 56;
-    const geom = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    const velocities = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      positions[i * 3 + 0] = pos.x;
-      positions[i * 3 + 1] = 0.06;
-      positions[i * 3 + 2] = pos.z;
-      const a = Math.random() * Math.PI * 2;
-      const sp = 0.8 + Math.random() * 2.0;
-      velocities[i * 3 + 0] = Math.cos(a) * sp;
-      velocities[i * 3 + 1] = 2.2 + Math.random() * 2.2;
-      velocities[i * 3 + 2] = Math.sin(a) * sp;
-    }
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xffe08a,
-      size: renderRadius * 0.22,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true
-    });
-    const ps = new THREE.Points(geom, mat);
-    ps.userData = { velocities, age: 0, lifespan: 0.7, gravity: -6.0 };
-    effectsGroup.add(ps);
-    activeTileBursts.add(ps);
-  }
+  // spawnTileSparkBurst provided by tileBurst system
 
   // Camera controls: pan/orbit/zoom
   const drag = { active: false, mode: 'pan', lastX: 0, lastY: 0 };
 
   // 3D UI removed – we expose an API to control the camera from HTML overlay
 
-  function onPointerDown(e) {
-    drag.active = true;
-    drag.mode = (e.shiftKey || e.button === 2) ? 'orbit' : 'pan';
-    drag.lastX = e.clientX;
-    drag.lastY = e.clientY;
-    renderer.domElement.setPointerCapture(e.pointerId);
-  }
-
-  function onPointerMove(e) {
-    if (!drag.active) return;
-    const dx = e.clientX - drag.lastX;
-    const dy = e.clientY - drag.lastY;
-    drag.lastX = e.clientX;
-    drag.lastY = e.clientY;
-
-    if (drag.mode === 'pan') {
-      const distance = state.radius;
-      const worldPerPixel = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * distance) / renderer.domElement.clientHeight;
-      const cosTheta = Math.cos(state.azimuth);
-      const sinTheta = Math.sin(state.azimuth);
-      const right = new THREE.Vector3(-sinTheta, 0, cosTheta);
-      const forward = new THREE.Vector3(-cosTheta, 0, -sinTheta);
-      const move = new THREE.Vector3()
-        .add(right.multiplyScalar(dx * worldPerPixel))
-        .add(forward.multiplyScalar(dy * worldPerPixel));
-      state.target.add(move);
-      updateCamera();
-    } else {
-      const orbitSpeed = 0.005;
-      // Invert left-right (azimuth) direction while orbiting with Shift/Right click
-      state.azimuth += dx * orbitSpeed;
-      state.polar -= dy * orbitSpeed;
-      const minPolar = 0.35;      // ~20° from top-down
-      const maxPolar = 1.35;      // ~77° from top-down
-      state.polar = THREE.MathUtils.clamp(state.polar, minPolar, maxPolar);
-      updateCamera();
-    }
-  }
+  // onPointerDown/onPointerMove handled by core/input via installInputHandlers
   // Tile hover feedback
   renderer.domElement.addEventListener('pointermove', (e) => {
     if (drag.active) return;
-    const rect = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -(((e.clientY - rect.top) / rect.height) * 2 - 1)
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObject(tilesGroup, true);
+    const ndc = screenToNdc(e, renderer.domElement);
+    const hits = pickFirst(tilesGroup, ndc, camera);
     if (hits.length > 0) {
       const obj = hits[0].object;
       const info = obj.userData || {};
@@ -523,117 +327,25 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
     // click selection
     const moved = Math.abs(e.clientX - drag.lastX) + Math.abs(e.clientY - drag.lastY);
     if (moved < 3) {
-      const rect = renderer.domElement.getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -(((e.clientY - rect.top) / rect.height) * 2 - 1)
-      );
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(ndc, camera);
-      // If no unit is currently selected, prefer picking a unit directly under cursor
-      if (!currentSelectedUnitId) {
-        const unitHitsPre = raycaster.intersectObject(unitsGroup, true);
-        if (unitHitsPre.length > 0) {
-          let chosenUnitId = null;
-          for (const h of unitHitsPre) {
-            let node = h.object;
-            while (node) {
-              if (node.userData && node.userData.kind === 'unit' && node.userData.unitId) {
-                chosenUnitId = node.userData.unitId;
-                break;
-              }
-              node = node.parent;
-            }
-            if (chosenUnitId) break;
-          }
-          if (chosenUnitId && typeof onSelectUnit === 'function') {
-            onSelectUnit({ unit: options.units.find((u) => u._id === chosenUnitId) || null });
-            return;
-          }
-        }
-      }
-      // Always treat clicks as tile-targeted selection first
-      const tileHitsCmd = raycaster.intersectObject(tilesGroup, true);
-      if (tileHitsCmd.length > 0) {
-        const tObj = tileHitsCmd[0].object;
-        const info = tObj && tObj.userData;
-        if (info && info.kind === 'tile') {
-          // If this tile hosts the Command Center, route to CC selection
-          if (commandCenterTile && info.q === commandCenterTile.q && info.r === commandCenterTile.r && typeof onSelectCommandCenter === 'function') {
-            onSelectCommandCenter({
-              tile: commandCenterTile,
-              pointer: { x: e.clientX, y: e.clientY }
-            });
-            return;
-          }
-          if (typeof onClickTile === 'function') {
-            onClickTile({ tile: { q: info.q, r: info.r } });
-            return;
-          }
-        }
-      }
-      // First try command center
-      if (commandCenter) {
-      const hit = raycaster.intersectObject(commandCenter, true);
-      if (hit.length > 0 && typeof onSelectCommandCenter === 'function') {
-          onSelectCommandCenter({
-            tile: commandCenterTile,
-            pointer: { x: e.clientX, y: e.clientY }
-          });
-          return;
-        }
-      }
-      // Then try resources (only if no tile was resolved)
-      const resHits = raycaster.intersectObject(resourcesGroup, true);
-      if (resHits.length > 0) {
-        const first = resHits[0].object;
-        const data = first.userData || {};
-        if (data.kind === 'resource' && typeof onSelectResource === 'function') {
-          onSelectResource({ resource: options.resources.find((r) => r._id === data.resourceId) || null });
-          return;
-        }
-      }
-      // Then try units (fallback)
-      const unitHits = raycaster.intersectObject(unitsGroup, true);
-      if (unitHits.length > 0) {
-        let chosenUnitId = null;
-        for (const h of unitHits) {
-          let node = h.object;
-          while (node) {
-            if (node.userData && node.userData.kind === 'unit' && node.userData.unitId) {
-              chosenUnitId = node.userData.unitId;
-              break;
-            }
-            node = node.parent;
-          }
-          if (chosenUnitId) break;
-        }
-        if (chosenUnitId && typeof onSelectUnit === 'function') {
-          onSelectUnit({ unit: options.units.find((u) => u._id === chosenUnitId) || null });
-          return;
-        }
-      }
-      // Then try tiles (fallback)
-      const tileHits = raycaster.intersectObject(tilesGroup, true);
-      if (tileHits.length > 0 && typeof onClickTile === 'function') {
-        const tObj = tileHits[0].object;
-        const info = tObj && tObj.userData;
-        if (info && info.kind === 'tile') {
-          onClickTile({ tile: { q: info.q, r: info.r } });
-          return;
-        }
-      }
-      // Then try command center
-      if (commandCenter) {
-        const hit = raycaster.intersectObject(commandCenter, true);
-        if (hit.length > 0 && typeof onSelectCommandCenter === 'function') {
-          onSelectCommandCenter({
-            tile: commandCenterTile,
-            pointer: { x: e.clientX, y: e.clientY }
-          });
-          return;
-        }
-      }
+      const ndc = screenToNdc(e, renderer.domElement);
+      const handled = handleClickPick({
+        ndc,
+        camera,
+        unitsGroup,
+        tilesGroup,
+        resourcesGroup,
+        commandCenter,
+        commandCenterTile,
+        currentSelectedUnitId,
+        optionsUnits: options.units,
+        optionsResources: options.resources,
+        onSelectUnit,
+        onSelectResource,
+        onSelectCommandCenter,
+        onClickTile,
+        pointer: { x: e.clientX, y: e.clientY },
+      });
+      if (handled) return;
       // If explore-direction modifier: send a direction vector on ground plane
       if (typeof onExploreDirection === 'function' && (e.altKey || e.metaKey)) {
         const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -753,33 +465,8 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
         fx.core.material.emissiveIntensity = 1.6 + 0.8 * (0.5 + 0.5 * Math.sin(p * 2.4));
       }
     }
-    // Update spark bursts for new tiles
-    for (const ps of Array.from(activeTileBursts)) {
-      const ud = ps.userData || {};
-      ud.age = (ud.age || 0) + dt;
-      const posAttr = ps.geometry.attributes.position;
-      const vel = ud.velocities;
-      const n = vel.length / 3;
-      for (let i = 0; i < n; i++) {
-        const ix = i * 3;
-        posAttr.array[ix + 0] += vel[ix + 0] * dt;
-        posAttr.array[ix + 1] += vel[ix + 1] * dt;
-        posAttr.array[ix + 2] += vel[ix + 2] * dt;
-        vel[ix + 1] += (ud.gravity || -9.8) * dt;
-      }
-      posAttr.needsUpdate = true;
-      const life = Math.max(0, 1 - (ud.age / (ud.lifespan || 0.7)));
-      ps.material.opacity = 0.95 * life;
-      ps.material.size = renderRadius * 0.22 * (0.6 + 0.4 * life);
-      if (ud.age >= (ud.lifespan || 0.7)) {
-        effectsGroup.remove(ps);
-        if (ps.geometry) ps.geometry.dispose();
-        if (ps.material) ps.material.dispose();
-        activeTileBursts.delete(ps);
-      } else {
-        ps.userData = ud;
-      }
-    }
+    // Update spark bursts via effects system
+    updateTileBursts(dt);
     // Follow selection ring if any
     if (currentSelectedUnitId) {
       const sel = unitMeshesById.get(currentSelectedUnitId);
@@ -800,6 +487,7 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
 
   const removeBasicInput = installInputHandlers(renderer, camera, state, updateCamera, drag);
   renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+  renderer.domElement.addEventListener('pointerup', onPointerUp, { passive: true });
   window.addEventListener('resize', onResize);
   onResize();
   animate();
@@ -882,8 +570,10 @@ export function createThreeApp(containerElement, tilesData = [], options = {}) {
   function cleanup() {
     cancelAnimationFrame(animationFrameId);
     window.removeEventListener('resize', onResize);
-    removeBasicInput && removeBasicInput();
+    removeBasicInput();
     renderer.domElement.removeEventListener('wheel', onWheel);
+    renderer.domElement.removeEventListener('pointerup', onPointerUp);
+    disposeTileBursts();
     renderer.dispose();
     hexDisc.dispose();
     tileMaterial.dispose();

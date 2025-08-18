@@ -21,3 +21,10 @@ I started from zero and pair‑coded this app in a single day. It was amazing to
 - Captured learnings and decisions in `docs/learnings.md`, including timing/GFX drift prevention.
 
 I love the feel: the orb’s satellites, the selection ring, the gentle goal pillar, and the calm starfield. The foundation is solid: the loop is robust, visuals are readable, and the codebase is ready for modular growth (units, resources, UI next).
+
+August 17 — Refactor pass (modular effects)
+
+- Extracted tile burst and energy spike particle effects to `imports/game/scene/effects/tileBurst.js`.
+- Integrated the effects system into the scene lifecycle (update and cleanup), keeping `createThreeApp.js` as façade.
+- Removed duplicated helpers (`spawnEnergySpikes`, `spawnTileSparkBurst`) from the façade; now provided by the effects module.
+- Updated `docs/todo.md`: checked off `effects/tileBurst.js` under Scene modularization.

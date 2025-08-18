@@ -65,8 +65,8 @@
 
 - [x] Simplify movement rendering (snap to server positions; no interpolation).
 - [x] Tile‑first input invariant: always resolve a tile, then UI interprets (resource/unit/CC) for mode/selection.
-- [ ] Guard Explore after Harvest click: temporarily ignore Explore tile clicks for ~500 ms to avoid accidental overrides (optional UX).
-- [ ] Hover glow for the targeted tile to strengthen intent.
+- [x] Guard Explore after Harvest click: temporarily ignore Explore tile clicks for ~500 ms to avoid accidental overrides (optional UX).
+- [x] Hover glow for the targeted tile to strengthen intent.
 
 ### 3. Tests (manual, reproducible)
 
@@ -117,7 +117,6 @@
 - [x] `core/gfxSettings.js` (defaults + `applyGfxSettings`)
 - [x] `core/postprocess.js` (composer, Bloom/FXAA/SSAO)
 - [x] `core/input.js` (pointer down/move/up, wheel)
-- [ ] `math/axial.js` (conversions and helpers)
   - [x] `math/axial.js` (conversions and helpers)
 - [x] `tiles/index.js` (build/update, materials, outline)
 - [x] `units/index.js` (setUnits + selection) with:
@@ -126,38 +125,43 @@
   - [x] `units/animate.js`
 - [x] `resources/index.js`
 - [x] `indicators/goalIndicator.js`
-- [ ] `effects/tileBurst.js`
+- [x] `effects/tileBurst.js`
 - [x] `gizmos/lightGizmo.js`
-- [ ] Keep `createThreeApp.js` as a façade (unchanged API)
+- [x] `core/starfield.js`
+- [x] `props/commandCenter.js`
+- [x] `ui/selectionRings.js`
+- [x] `core/picking.js`
+- [x] `core/pickingHandlers.js`
+- [x] Keep `createThreeApp.js` as a façade (unchanged API)
 
 ### 2. Server (`server/main.js` → modules)
 
-- [ ] `server/sim/constants.js` (timings/costs/thresholds)
-- [ ] `server/sim/pathfinding.js` (A*)
-- [ ] `server/sim/tick.js` (pure simulation loop)
-- [ ] `server/sim/spawnResources.js` (rare spawns + loop)
-- [ ] `server/api/methods.js`
-- [ ] `server/api/publications.js`
-- [ ] `server/startup.js` (seeds, timers)
-- [ ] `server/db/indexes.js`
+- [x] `server/sim/constants.js` (timings/costs/thresholds)
+- [x] `server/sim/pathfinding.js` (A*)
+- [x] `server/sim/tick.js` (pure simulation loop)
+- [x] `server/sim/spawnResources.js` (rare spawns + loop)
+- [x] `server/api/methods.js`
+- [x] `server/api/publications.js`
+- [x] `server/startup.js` (seeds, timers)
+- [x] `server/db/indexes.js`
 
 ### 3. UI (`imports/ui/App.jsx` → components/hooks)
 
-- [ ] `components/GfxPanel.jsx`
-- [ ] `components/TopBar.jsx`
-- [ ] `components/UnitPanel.jsx`
-- [ ] `components/ResourcePanel.jsx`
-- [ ] `components/SelectionInfo.jsx`
-- [ ] `hooks/useSceneBridge.js` (scene API bridge)
+- [x] `components/GfxPanel.jsx`
+- [x] `components/TopBar.jsx`
+- [x] `components/UnitPanel.jsx`
+- [x] `components/ResourcePanel.jsx`
+- [x] `components/SelectionInfo.jsx`
+- [x] `hooks/useSceneBridge.js` (scene API bridge)
 - [ ] `hooks/useCollections.js` (subs + mapping)
 - [ ] `hooks/useUnitHotkeys.js`
 - [ ] `state/gfxUI.js` (or TS) centralized shape
 
 ### 4. Shared
 
-- [ ] `imports/shared/constants.js` (timings, costs, caps)
-- [ ] `imports/shared/colors.js` (`colorForGoal` + palette)
-- [ ] `imports/shared/log.js` (dlog/flags)
+- [x] `imports/shared/constants.js` (timings, costs, caps)
+- [x] `imports/shared/colors.js` (`colorForGoal` + palette)
+- [x] `imports/shared/log.js` (dlog/flags)
 - [ ] JSDoc typings (or TS) for `Unit`, `Tile`, `Resource`, `Base`
 
 ### 5. Strategy and criteria
