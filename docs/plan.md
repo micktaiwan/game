@@ -1,5 +1,62 @@
 # Game Plan
 
+## Next priorities
+
+- Enemy baseline: minimal enemy model/collection, periodic spawn near edges,
+  simple seek behavior toward the base.
+- Combat foundations: simple collisions, damage-over-time,
+  unit destruction/cleanup.
+- Soldiers: implement Defend/Attack behavior in the server tick and related
+  states; pathing/aggro hooks (after enemy baseline).
+- Diagnostics: small dev overlay (client) showing `energy` and active holds
+  count.
+- Movement: client-side interpolation between server positions + movement FX;
+  add subtle unit trails.
+- Tests: add unit tests for `server/sim/tick` (holds/energy/gating).
+  Pathfinding tests already exist.
+- Map: introduce minimal tile state (discovered/resource/derived occupancy) and
+  prepare chunking for scale.
+- UX/FX: harvest impact sparks and camera micro-shake on key events; HUD icons
+  for energy/metal.
+- AI: periodic production based on resources, then attack waves toward the base
+  (after combat foundations).
+- Typing: JSDoc/TS for `Unit`, `Tile`, `Resource`, `Base`.
+- Perf/assets: placeholder assets in `public/`, material micro-variation,
+  instancing/LOD for tiles/resources.
+
+## AI implementation plan (server)
+
+- Collections
+  - Add `EnemiesCollection` in `imports/api/enemies.js`.
+  - Keep enemies separate from `units` to control client publication.
+- Modules
+  - `server/sim/enemies/blackboard.js`: tiles, occupancy, helpers per tick.
+  - `server/sim/enemies/actions.js`: `stepToward`, `tryAttack`, `retarget`,
+    `panicFlee`.
+  - `server/sim/enemies/utility.js`: simple scoring for state choice.
+  - `server/sim/enemies/hfsm.js`: resolve state + transitions.
+  - `server/sim/enemies/think.js`: pick due enemies, run one think per agent,
+    apply updates.
+  - `server/sim/spawnEnemies.js`: baseline spawns, later the Director/waves.
+- Integration
+  - In `server/sim/tick.js` call `runEnemyAiTick(now)` with a per-tick budget.
+  - Add indexes on `enemies({ q: 1, r: 1 })` and `updatedAt`.
+  - Extend `bases('player')` with `hp` and define lose condition.
+- Data model (enemy)
+  - `{ type, q, r, hp, goal, goalData, lastThinkAt, nextThinkAt,
+     attackHoldUntil, pathTarget, pathFailCount, createdAt, updatedAt }`.
+
+## Phased delivery (high level)
+
+1) Baseline playable
+   - Enemy baseline (edge spawns, seek base), combat foundations (DoT,
+     death/cleanup), base HP.
+2) Robustness and pacing
+   - Soldiers defend/attack vs enemies, think budget + path throttling,
+     basic tests, small FX.
+3) Adaptation
+   - Minimal Director (waves), light Utility weights, learning (optional).
+
 ## Vision
 
 - Real-time strategy and exploration on a 3D hex world. The player expands
@@ -57,7 +114,7 @@
 
 ### Architecture target (client)
 
-- Ultra-thin scene façade `imports/game/scene/createThreeApp.js`:
+- Ultra-thin scene facade `imports/game/scene/createThreeApp.js`:
   orchestration + public API only.
 - Domain modules:
   - core: `createScene`, `postprocess`, `input`, `camera`, `lights`,
@@ -112,11 +169,11 @@
 
 ### Implemented visual features (current)
 
-- GFX control panel with live sliders/toggles (exposure, ambient, fog, bloom,
-  FXAA, tiles brightness/emissive, outlines) and JSON export.
-- Directional light gizmo + left/right azimuth control; optional auto‑orbit
-  (daylight‑like loop).
-- Command Center: “Tri‑pod capacitors” design with breathing animation
+- GFX control panel with live sliders/toggles (exposure, ambient, fog,
+  bloom, FXAA, tiles brightness/emissive, outlines) and JSON export.
+- Directional light gizmo + left/right azimuth control; optional auto-orbit
+  (daylight-like loop).
+- Command Center: "Tri-pod capacitors" design with breathing animation
   (halo/core) and energy spikes on spawn.
 - Tile discovery sparks and unit goal columns with continuous animation.
 
@@ -137,11 +194,11 @@
 - Implemented: `hooks/useSceneBridge`, Panels (TopBar, GfxPanel, Unit/Resource, Selection)
 - Next: `hooks/useCollections`, `hooks/useUnitHotkeys`
 
-Façade (client) — description (sans code):
-- `createThreeApp(container, tiles, options)`: monte la scène et expose une API
-  impérative `{ resetView, cleanup, setUnits, setResources, setSelectedUnitId,
-  setTiles, setBase, applyGfxSettings, getGfxSettings }`.
-- `cleanup()` libère géométries, matériaux, listeners et retire le canvas.
+Facade (client) — description (code-free):
+- `createThreeApp(container, tiles, options)`: mounts the scene and exposes an
+  imperative API `{ resetView, cleanup, setUnits, setResources,
+  setSelectedUnitId, setTiles, setBase, applyGfxSettings, getGfxSettings }`.
+- `cleanup()`: releases geometries, materials, listeners and removes the canvas.
 
 ### 4. Shared/types
 
