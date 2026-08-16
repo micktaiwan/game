@@ -10,7 +10,7 @@
 
 - Start the dev server:
   - `meteor`
-- App will be available at `http://localhost:3000`
+- App will be available at `http://localhost:3600`
 
 ## Docs
 
